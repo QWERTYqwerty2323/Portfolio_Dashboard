@@ -4,7 +4,7 @@
   "metadata": {
     "colab": {
       "provenance": [],
-      "authorship_tag": "ABX9TyOYW8aPOoQm/Pq0e+vkZkRG",
+      "authorship_tag": "ABX9TyPAqumOyLaNjRCx3+DGuox8",
       "include_colab_link": true
     },
     "kernelspec": {
@@ -34,10 +34,11 @@
       },
       "outputs": [],
       "source": [
-        "streamlit>=1.38,<2\n",
-        "yfinance>=0.2.40,<1\n",
-        "pandas>=2.0,<4\n",
-        "plotly>=5.20,<7"
+        "streamlit\n",
+        "yfinance\n",
+        "pandas\n",
+        "plotly\n",
+        "numpy"
       ]
     }
   ]
