@@ -4,7 +4,7 @@
   "metadata": {
     "colab": {
       "provenance": [],
-      "authorship_tag": "ABX9TyNpGLY88qGg59JcrcoobsM2",
+      "authorship_tag": "ABX9TyPofrngHFiURSCflszQ43gf",
       "include_colab_link": true
     },
     "kernelspec": {
@@ -627,21 +627,6 @@
         "    st.error(\"Something went wrong rendering the company screener. Details below:\")\n",
         "    st.exception(e)"
       ]
-    },
-    {
-      "cell_type": "code",
-      "source": [
-        "streamlit>=1.38\n",
-        "yfinance>=0.2.40\n",
-        "pandas>=2.0\n",
-        "numpy>=1.24\n",
-        "plotly>=5.20"
-      ],
-      "metadata": {
-        "id": "VFBLl342I_-G"
-      },
-      "execution_count": null,
-      "outputs": []
     }
   ]
 }
