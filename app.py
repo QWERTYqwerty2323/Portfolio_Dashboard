@@ -20,7 +20,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import concurrent.futures as cf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -41,9 +41,11 @@ st.set_page_config(
 # -----------------------------------------------------------------------------
 TOTAL_CAPITAL    = 1_00_00_000     # ₹1 Crore
 BROKERAGE_RATE   = 0.0025          # 0.25% on total volume (invested + current)
-STCG_RATE        = 0.20            # 20% on net positive gains after brokerage
+STCG_RATE        = 0.20            # Modelled 20% tax if positions were sold today
 BENCHMARK        = "^NSEI"
 HOLDING_YEARS    = 3
+INVESTMENT_DATE  = pd.Timestamp("2026-09-01")
+TARGET_DATE      = INVESTMENT_DATE + pd.DateOffset(years=HOLDING_YEARS)
 NETWORK_TIMEOUT  = 8                # hard cap, seconds, per external call
 PREFETCH_WORKERS = 8                # parallel fetch workers at startup
 
@@ -199,7 +201,7 @@ def _bounded(fn, timeout=NETWORK_TIMEOUT):
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_history(ticker, period="5y"):
     def _do():
         df = yf.Ticker(ticker).history(period=period, auto_adjust=True, timeout=NETWORK_TIMEOUT)
@@ -207,7 +209,7 @@ def fetch_history(ticker, period="5y"):
     return _bounded(_do)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_info(ticker):
     def _do():
         info = yf.Ticker(ticker).info
@@ -235,14 +237,18 @@ with st.spinner("Fetching live NSE market data (falls back automatically if Yaho
 # 4. PRICE / BETA / ENTRY-DATE HELPERS
 # -----------------------------------------------------------------------------
 def get_entry_date(hist):
+    """Return the first available trading session on/after the fixed investment date."""
     if hist is None or hist.empty:
         return None
-    target = pd.Timestamp(datetime.now() - timedelta(days=365 * HOLDING_YEARS))
+
     idx = hist.index
-    if idx.tz is not None and target.tzinfo is None:
+    target = pd.Timestamp(INVESTMENT_DATE)
+
+    if getattr(idx, "tz", None) is not None and target.tzinfo is None:
         target = target.tz_localize(idx.tz)
-    pos = idx.get_indexer([target], method="nearest")[0]
-    return idx[pos]
+
+    eligible = idx[idx >= target]
+    return eligible[0] if len(eligible) else None
 
 
 def compute_beta_vs_nifty(hist):
@@ -270,107 +276,166 @@ def get_price_series(t):
     if live:
         cmp_ = float(hist["Close"].iloc[-1])
         entry_date = get_entry_date(hist)
-        buy_price = float(hist.loc[entry_date, "Close"]) if entry_date is not None else float(hist["Close"].iloc[0])
+        buy_price = (
+            float(hist.loc[entry_date, "Close"])
+            if entry_date is not None
+            else None
+        )
         beta = info.get("beta") or compute_beta_vs_nifty(hist) or fb.get("beta", 1.0)
         low52 = float(hist["Close"].tail(252).min())
         high52 = float(hist["Close"].tail(252).max())
     else:
+        # Do NOT use the old hard-coded historical buy prices as the
+        # 01-Sep-2026 entry price. If Yahoo is unavailable, the true
+        # investment-date price cannot be known.
         cmp_ = fb.get("cmp", 100.0)
-        buy_price = fb.get("buy_price", cmp_ * 0.6)
+        buy_price = None
         beta = fb.get("beta", 1.0)
         low52 = fb.get("low52", cmp_ * 0.8)
         high52 = fb.get("high52", cmp_ * 1.2)
 
-    return {"cmp": cmp_, "buy_price": buy_price, "beta": beta,
-            "low52": low52, "high52": high52, "live": live, "info": info}
+    return {
+        "cmp": cmp_, "buy_price": buy_price, "beta": beta,
+        "low52": low52, "high52": high52, "live": live, "info": info
+    }
 
 
 # -----------------------------------------------------------------------------
 # 5. SCENARIO PORTFOLIO ENGINE
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def compute_scenario(scenario_name):
     sc = SCENARIOS[scenario_name]
     rows = []
+    today = pd.Timestamp.now().normalize()
+    elapsed_years = max((today - INVESTMENT_DATE).days / 365.25, 0.0)
+
     for t, w_pct in sc["weights"].items():
         meta = ASSET_META[t]
         allocated = TOTAL_CAPITAL * w_pct / 100.0
 
         if meta["class"] == "Debt":
             invested = allocated
-            current_value = invested * ((1 + meta["yield"]) ** HOLDING_YEARS)
+            current_value = invested * ((1 + meta["yield"]) ** elapsed_years)
             qty = buy_price = cmp_ = None
             beta = 0.0
+            entry_available = True
         else:
             p = get_price_series(t)
             buy_price, cmp_, beta = p["buy_price"], p["cmp"], p["beta"]
-            qty = int(allocated / buy_price) if buy_price and buy_price > 0 else 0
-            invested = qty * buy_price
-            current_value = qty * cmp_
-            leftover = allocated - invested
-            invested += leftover
-            current_value += leftover
+            entry_available = buy_price is not None and buy_price > 0
+
+            if entry_available:
+                qty = int(allocated / buy_price)
+                invested = qty * buy_price
+                leftover = allocated - invested
+                invested += leftover
+                current_value = qty * cmp_ + leftover
+            else:
+                # Offline mode: keep capital at cost rather than inventing
+                # a 01-Sep-2026 entry price.
+                qty = 0
+                invested = allocated
+                current_value = allocated
 
         gross_profit = current_value - invested
         brokerage = BROKERAGE_RATE * (invested + current_value)
         taxable_gain = max(gross_profit - brokerage, 0)
-        stcg = STCG_RATE * taxable_gain
-        net_profit = gross_profit - brokerage - stcg
-        cagr = (current_value / invested) ** (1 / HOLDING_YEARS) - 1 if invested > 0 else 0.0
+        tax = STCG_RATE * taxable_gain
+        net_profit = gross_profit - brokerage - tax
+        cagr = (
+            (current_value / invested) ** (1 / elapsed_years) - 1
+            if invested > 0 and elapsed_years > 0 and current_value > 0
+            else 0.0
+        )
 
         rows.append({
-            "ticker": t, "name": meta["name"], "class": meta["class"], "sector": meta.get("sector", ""),
-            "weight_pct": w_pct, "allocated": allocated, "qty": qty, "buy_price": buy_price, "cmp": cmp_,
-            "invested": invested, "current_value": current_value, "gross_profit": gross_profit,
-            "brokerage": brokerage, "stcg": stcg, "net_profit": net_profit, "beta": beta, "cagr": cagr,
+            "ticker": t, "name": meta["name"], "class": meta["class"],
+            "sector": meta.get("sector", ""), "weight_pct": w_pct,
+            "allocated": allocated, "qty": qty, "buy_price": buy_price,
+            "cmp": cmp_, "invested": invested, "current_value": current_value,
+            "gross_profit": gross_profit, "brokerage": brokerage, "stcg": tax,
+            "net_profit": net_profit, "beta": beta, "cagr": cagr,
+            "entry_available": entry_available,
         })
 
     df = pd.DataFrame(rows)
     inv_sum, cur_sum = df["invested"].sum(), df["current_value"].sum()
     kpis = {
-        "current_value": cur_sum, "invested": inv_sum,
-        "gross_profit": df["gross_profit"].sum(), "brokerage": df["brokerage"].sum(),
-        "stcg": df["stcg"].sum(), "net_profit": df["net_profit"].sum(),
+        "current_value": cur_sum,
+        "invested": inv_sum,
+        "gross_profit": df["gross_profit"].sum(),
+        "brokerage": df["brokerage"].sum(),
+        "stcg": df["stcg"].sum(),
+        "net_profit": df["net_profit"].sum(),
         "net_return_pct": (cur_sum / inv_sum - 1) * 100 if inv_sum else 0.0,
         "weighted_beta": (df["weight_pct"] / 100 * df["beta"]).sum(),
         "target": sc["target"],
+        "elapsed_years": elapsed_years,
+        "target_date": TARGET_DATE,
+        "days_to_target": max((TARGET_DATE - today).days, 0),
+        "entry_date": INVESTMENT_DATE,
     }
+
     return df, kpis
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def get_nifty_norm():
     close_hist = fetch_history(BENCHMARK)
     if close_hist is None or close_hist.empty:
         return None
-    close = close_hist["Close"]
+
+    entry_date = get_entry_date(close_hist)
+    if entry_date is None:
+        return None
+
+    close = close_hist.loc[entry_date:, "Close"]
     return close / close.iloc[0] * 100
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def build_portfolio_index_series(scenario_name):
+    """Actual portfolio performance from 01-Sep-2026, not a historical 3-year lookback."""
+    weights = SCENARIOS[scenario_name]["weights"]
     nifty_hist = fetch_history(BENCHMARK)
+
     if nifty_hist is None or nifty_hist.empty:
         return None
 
-    weights = SCENARIOS[scenario_name]["weights"]
-    master_idx = nifty_hist.index
-    days = (master_idx - master_idx[0]).days.values
+    entry_date = get_entry_date(nifty_hist)
+    if entry_date is None:
+        return None
 
+    master_idx = nifty_hist.loc[entry_date:].index
+    elapsed_days = (master_idx - master_idx[0]).days.values
     portfolio_rel = pd.Series(0.0, index=master_idx)
+
     for t, w_pct in weights.items():
         meta = ASSET_META[t]
         w = w_pct / 100.0
+
         if meta["class"] == "Debt":
-            rel = pd.Series((1 + meta["yield"]) ** (days / 365.0), index=master_idx)
+            rel = pd.Series(
+                (1 + meta["yield"]) ** (elapsed_days / 365.25),
+                index=master_idx
+            )
         else:
             hist = fetch_history(t)
             if hist is not None and not hist.empty:
-                s = hist["Close"].reindex(master_idx, method="ffill").bfill()
-                rel = s / s.iloc[0]
+                stock_entry = get_entry_date(hist)
+                if stock_entry is not None:
+                    s = hist.loc[stock_entry:, "Close"].reindex(master_idx, method="ffill")
+                    s = s.dropna()
+                    rel = s / s.iloc[0]
+                    rel = rel.reindex(master_idx).ffill().bfill()
+                else:
+                    rel = pd.Series(1.0, index=master_idx)
             else:
-                fb_cagr = 0.15
-                rel = pd.Series((1 + fb_cagr) ** (days / 365.0), index=master_idx)
+                # Missing live data is kept flat rather than fabricating a
+                # return from an unrelated historical fallback price.
+                rel = pd.Series(1.0, index=master_idx)
+
         portfolio_rel = portfolio_rel.add(rel * w, fill_value=0)
 
     return portfolio_rel * 100
@@ -418,17 +483,48 @@ def build_bar(df, scenario_name):
 def build_line(scenario_name):
     port_idx = build_portfolio_index_series(scenario_name)
     nifty_norm = get_nifty_norm()
+
     fig = go.Figure()
-    if port_idx is not None and nifty_norm is not None:
-        fig.add_trace(go.Scatter(x=port_idx.index, y=port_idx.values, mode="lines",
-                                  name="Portfolio", line=dict(color="#1a73e8", width=2)))
-        fig.add_trace(go.Scatter(x=nifty_norm.index, y=nifty_norm.values, mode="lines",
-                                  name="Nifty 50", line=dict(color="#e37400", width=2, dash="dot")))
+
+    if port_idx is not None:
+        fig.add_trace(go.Scatter(
+            x=port_idx.index, y=port_idx.values, mode="lines",
+            name="Portfolio", line=dict(color="#1a73e8", width=2)
+        ))
+
+        sc = SCENARIOS[scenario_name]
+        target_index = sc["target"] / TOTAL_CAPITAL * 100
+        target_x = [INVESTMENT_DATE, TARGET_DATE]
+        fig.add_trace(go.Scatter(
+            x=target_x, y=[target_index, target_index],
+            mode="lines", name=f"3-Year Target ({inr(sc['target'])})",
+            line=dict(color="#188038", width=2, dash="dash")
+        ))
+
+    if nifty_norm is not None:
+        fig.add_trace(go.Scatter(
+            x=nifty_norm.index, y=nifty_norm.values, mode="lines",
+            name="Nifty 50", line=dict(color="#e37400", width=2, dash="dot")
+        ))
     else:
-        fig.add_annotation(text="Benchmark history unavailable — Nifty 50 data could not be fetched",
-                            showarrow=False)
-    fig.update_layout(title=f"5-Year Normalized Return: Portfolio vs Nifty 50 (Base = ₹100) — {scenario_name}",
-                       template="plotly_white", height=420, xaxis_title="Date", yaxis_title="Indexed Value")
+        fig.add_annotation(
+            text="Benchmark history unavailable — Nifty 50 data could not be fetched",
+            showarrow=False
+        )
+
+    fig.add_vline(
+        x=TARGET_DATE,
+        line_dash="dash",
+        annotation_text=f"Target date: {TARGET_DATE.strftime('%d %b %Y')}",
+        annotation_position="top right"
+    )
+
+    fig.update_layout(
+        title=f"Performance Since {INVESTMENT_DATE.strftime('%d %b %Y')}: Portfolio vs Nifty 50",
+        template="plotly_white", height=420,
+        xaxis_title="Date", yaxis_title="Indexed Value (₹100 at investment)",
+        xaxis=dict(range=[INVESTMENT_DATE, TARGET_DATE])
+    )
     return fig
 
 
@@ -452,17 +548,28 @@ def build_dma_chart(ticker):
 # 7. UI — HEADER + DATA-SOURCE STATUS
 # -----------------------------------------------------------------------------
 st.title("🇮🇳 3-Year Indian Equity Portfolio Dashboard")
-st.caption("₹1 Crore capital · 15-asset universe · 3-year multi-scenario terminal-value model")
+st.caption(
+    f"₹1 Crore capital · 15-asset universe · Investment date: {INVESTMENT_DATE.strftime('%d %b %Y')} "
+    f"· 3-year target date: {TARGET_DATE.strftime('%d %b %Y')}"
+)
 
 with st.expander("📡 Data source status (tap to check live vs. offline-fallback)"):
     live_flags = {t: (fetch_history(t) is not None) for t in YF_TICKERS}
     live_count = sum(live_flags.values())
-    st.caption(f"{live_count} / {len(live_flags)} tickers on live Yahoo Finance data. "
-               f"The rest are using built-in offline fallback fundamentals — the dashboard "
-               f"still works normally either way, figures are just less current.")
+    st.caption(
+        f"{live_count} / {len(live_flags)} tickers on live Yahoo Finance data. "
+        f"Entry prices are taken from the first trading session on/after "
+        f"{INVESTMENT_DATE.strftime('%d %b %Y')}. If Yahoo Finance is unavailable, "
+        f"the dashboard will not invent an entry price from older fallback data."
+    )
     status_cols = st.columns(4)
     for i, (t, ok) in enumerate(live_flags.items()):
         status_cols[i % 4].write(f"{'🟢' if ok else '🟡'} {ASSET_META[t]['name']}")
+
+if st.button("🔄 Refresh market data now"):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.rerun()
 
 # -----------------------------------------------------------------------------
 # 8. UI — SCENARIO BUTTONS  (st.session_state keeps the selection across reruns)
@@ -491,22 +598,33 @@ try:
 
     # ---- KPI cards -----------------------------------------------------
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Current Portfolio Value", inr(kpis["current_value"]))
-    k2.metric("Total Invested", inr(kpis["invested"]))
+    k1.metric("Portfolio Value Today", inr(kpis["current_value"]))
+    k2.metric(f"Invested on {INVESTMENT_DATE.strftime('%d %b %Y')}", inr(kpis["invested"]))
     k3.metric("Gross Profit", inr(kpis["gross_profit"]))
     k4.metric("Total Brokerage", inr(kpis["brokerage"]))
 
     k5, k6, k7, k8 = st.columns(4)
-    k5.metric("Estimated STCG Tax (20%)", inr(kpis["stcg"]))
+    k5.metric("Estimated Tax (Model)", inr(kpis["stcg"]))
     k6.metric("Net Take-Home Profit", inr(kpis["net_profit"]))
     k7.metric("Net Portfolio Return", f"{kpis['net_return_pct']:.2f}%")
     k8.metric("Weighted Portfolio Beta", f"{kpis['weighted_beta']:.2f}")
 
     gap = kpis["target"] - kpis["current_value"]
+    st.info(
+        f"📅 **Investment date:** {INVESTMENT_DATE.strftime('%d %b %Y')}  ·  "
+        f"**3-year target date:** {TARGET_DATE.strftime('%d %b %Y')}  ·  "
+        f"**Days remaining:** {kpis['days_to_target']:,}"
+    )
     if gap <= 0:
-        st.success(f"3-Year Target {inr(kpis['target'])} — achieved / exceeded ✅")
+        st.success(
+            f"Current value is already above the model target of {inr(kpis['target'])}. "
+            f"The actual 3-year result will be measured on {TARGET_DATE.strftime('%d %b %Y')}."
+        )
     else:
-        st.warning(f"3-Year Target {inr(kpis['target'])} — shortfall of {inr(gap)}")
+        st.warning(
+            f"Current value is {inr(gap)} below the model target of {inr(kpis['target'])}. "
+            f"This is a progress check, not a completed 3-year result."
+        )
 
     # ---- Charts ----------------------------------------------------------
     c1, c2 = st.columns([1, 1.4])
@@ -527,10 +645,10 @@ try:
     show["CMP"] = show["cmp"].map(lambda v: "-" if v is None or pd.isna(v) else inr(v))
     show["Current Value"] = show["current_value"].map(inr)
     show["Net Profit"] = show["net_profit"].map(inr)
-    show["CAGR"] = show["cagr"].map(lambda v: f"{v * 100:.2f}%")
+    show["Return Since Entry"] = show.apply(lambda r: f"{((r["cmp"] / r["buy_price"] - 1) * 100):.2f}%" if pd.notna(r["buy_price"]) and r["buy_price"] else "-", axis=1)
     show["Beta"] = show["beta"].map(lambda v: f"{v:.2f}")
     cols = ["name", "class", "Weight %", "Allocated", "Qty", "Buy Price", "CMP",
-            "Current Value", "Net Profit", "CAGR", "Beta"]
+            "Current Value", "Net Profit", "Return Since Entry", "Beta"]
     st.dataframe(show[cols].rename(columns={"name": "Asset", "class": "Class"}),
                  width="stretch", hide_index=True)
 
@@ -574,13 +692,19 @@ try:
 
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("CMP", inr(cmp_), f"{day_change_pct:+.2f}% today")
-    d2.metric("Market Cap", ("₹" + format(mcap_cr, ",.0f") + " Cr") if mcap_cr else "N/A")
+    d2.metric("Entry Price (01-Sep-2026)", inr(p["buy_price"]) if p["buy_price"] else "N/A")
     d3.metric("Trailing P/E", f"{pe:.1f}x" if pe else "N/A")
     d4.metric("Beta", f"{beta:.2f}")
 
     d5, d6 = st.columns(2)
     d5.metric("Trailing EPS", f"₹{eps:.2f}" if eps else "N/A")
     d6.metric("52W Range", f"{inr(low52)} – {inr(high52)}")
+    if p["buy_price"]:
+        entry_return = (cmp_ / p["buy_price"] - 1) * 100
+        st.metric(
+            f"Return Since {INVESTMENT_DATE.strftime('%d %b %Y')}",
+            f"{entry_return:+.2f}%"
+        )
 
     st.markdown(f"**Valuation Status:** {valuation_status(pe, meta['sector'])}")
     st.markdown(meta["thesis"])
