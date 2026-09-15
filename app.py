@@ -41,7 +41,8 @@ st.set_page_config(
 # -----------------------------------------------------------------------------
 TOTAL_CAPITAL    = 1_00_00_000     # ₹1 Crore
 BROKERAGE_RATE   = 0.0025          # 0.25% on total volume (invested + current)
-STCG_RATE        = 0.20            # Modelled 20% tax if positions were sold today
+LTCG_RATE        = 0.125           # 12.5% LTCG model for listed equity at/after 12 months
+LTCG_EXEMPTION   = 1_25_000        # Section 112A annual threshold for qualifying listed equity
 BENCHMARK        = "^NSEI"
 HOLDING_YEARS    = 3
 INVESTMENT_DATE  = pd.Timestamp("2026-09-01")
@@ -204,7 +205,7 @@ def _bounded(fn, timeout=NETWORK_TIMEOUT):
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_history(ticker, period="5y"):
     def _do():
-        df = yf.Ticker(ticker).history(period=period, auto_adjust=True, timeout=NETWORK_TIMEOUT)
+        df = yf.Ticker(ticker).history(period=period, auto_adjust=False, actions=True, timeout=NETWORK_TIMEOUT)
         return df if df is not None and not df.empty else None
     return _bounded(_do)
 
@@ -237,18 +238,25 @@ with st.spinner("Fetching live NSE market data (falls back automatically if Yaho
 # 4. PRICE / BETA / ENTRY-DATE HELPERS
 # -----------------------------------------------------------------------------
 def get_entry_date(hist):
-    """Return the first available trading session on/after the fixed investment date."""
+    """First actual trading session on or after the fixed investment date."""
     if hist is None or hist.empty:
         return None
-
     idx = hist.index
     target = pd.Timestamp(INVESTMENT_DATE)
-
     if getattr(idx, "tz", None) is not None and target.tzinfo is None:
         target = target.tz_localize(idx.tz)
-
     eligible = idx[idx >= target]
     return eligible[0] if len(eligible) else None
+
+
+def get_date_slice(hist, start_date):
+    if hist is None or hist.empty:
+        return None
+    idx = hist.index
+    target = pd.Timestamp(start_date)
+    if getattr(idx, "tz", None) is not None and target.tzinfo is None:
+        target = target.tz_localize(idx.tz)
+    return hist.loc[idx >= target].copy()
 
 
 def compute_beta_vs_nifty(hist):
@@ -276,18 +284,11 @@ def get_price_series(t):
     if live:
         cmp_ = float(hist["Close"].iloc[-1])
         entry_date = get_entry_date(hist)
-        buy_price = (
-            float(hist.loc[entry_date, "Close"])
-            if entry_date is not None
-            else None
-        )
+        buy_price = float(hist.loc[entry_date, "Close"]) if entry_date is not None else None
         beta = info.get("beta") or compute_beta_vs_nifty(hist) or fb.get("beta", 1.0)
         low52 = float(hist["Close"].tail(252).min())
         high52 = float(hist["Close"].tail(252).max())
     else:
-        # Do NOT use the old hard-coded historical buy prices as the
-        # 01-Sep-2026 entry price. If Yahoo is unavailable, the true
-        # investment-date price cannot be known.
         cmp_ = fb.get("cmp", 100.0)
         buy_price = None
         beta = fb.get("beta", 1.0)
@@ -297,6 +298,63 @@ def get_price_series(t):
     return {
         "cmp": cmp_, "buy_price": buy_price, "beta": beta,
         "low52": low52, "high52": high52, "live": live, "info": info
+    }
+
+
+def calculate_equity_position(ticker, allocated):
+    """Calculate a position using the actual 01-Sep-2026 close.
+
+    Capital is treated as the complete amount available for the allocation,
+    including the modelled buy-side brokerage. Whole shares are purchased;
+    the unused balance remains cash.
+    """
+    p = get_price_series(ticker)
+    hist = fetch_history(ticker)
+    buy_price, cmp_, beta = p["buy_price"], p["cmp"], p["beta"]
+
+    if buy_price is None or buy_price <= 0 or hist is None or hist.empty:
+        return {
+            "qty": 0, "effective_qty": 0.0, "buy_price": None, "cmp": cmp_,
+            "trade_value": 0.0, "cash_leftover": allocated,
+            "buy_brokerage": 0.0, "dividend_cash": 0.0,
+            "market_value": allocated, "current_value": allocated,
+            "beta": beta, "entry_available": False,
+            "entry_date_actual": None,
+        }
+
+    entry_date = get_entry_date(hist)
+    qty = int(allocated / (buy_price * (1 + BROKERAGE_RATE)))
+    trade_value = qty * buy_price
+    buy_brokerage = trade_value * BROKERAGE_RATE
+    cash_leftover = allocated - trade_value - buy_brokerage
+
+    # Account for any stock splits after purchase. This keeps the position's
+    # current share count correct without inventing a new purchase.
+    effective_qty = float(qty)
+    held = get_date_slice(hist, entry_date)
+    if held is not None and "Stock Splits" in held.columns:
+        for split in held["Stock Splits"].fillna(0):
+            if split and float(split) > 0:
+                effective_qty *= float(split)
+
+    market_value = effective_qty * cmp_
+
+    # Dividends are treated as cash received, not automatically reinvested.
+    dividend_cash = 0.0
+    if held is not None and "Dividends" in held.columns:
+        # For this portfolio's current universe there are no known split events
+        # around the entry date; use the effective position size for dividends.
+        dividend_cash = float(held["Dividends"].fillna(0).sum()) * effective_qty
+
+    current_value = market_value + cash_leftover + dividend_cash
+
+    return {
+        "qty": qty, "effective_qty": effective_qty, "buy_price": buy_price,
+        "cmp": cmp_, "trade_value": trade_value, "cash_leftover": cash_leftover,
+        "buy_brokerage": buy_brokerage, "dividend_cash": dividend_cash,
+        "market_value": market_value, "current_value": current_value,
+        "beta": beta, "entry_available": True,
+        "entry_date_actual": entry_date,
     }
 
 
@@ -317,32 +375,41 @@ def compute_scenario(scenario_name):
         if meta["class"] == "Debt":
             invested = allocated
             current_value = invested * ((1 + meta["yield"]) ** elapsed_years)
-            qty = buy_price = cmp_ = None
+            qty = None
+            buy_price = None
+            cmp_ = None
             beta = 0.0
+            trade_value = 0.0
+            buy_brokerage = 0.0
+            cash_leftover = 0.0
+            dividend_cash = 0.0
+            market_value = current_value
             entry_available = True
+            entry_date_actual = INVESTMENT_DATE
         else:
-            p = get_price_series(t)
-            buy_price, cmp_, beta = p["buy_price"], p["cmp"], p["beta"]
-            entry_available = buy_price is not None and buy_price > 0
-
-            if entry_available:
-                qty = int(allocated / buy_price)
-                invested = qty * buy_price
-                leftover = allocated - invested
-                invested += leftover
-                current_value = qty * cmp_ + leftover
-            else:
-                # Offline mode: keep capital at cost rather than inventing
-                # a 01-Sep-2026 entry price.
-                qty = 0
-                invested = allocated
-                current_value = allocated
+            pos = calculate_equity_position(t, allocated)
+            qty = pos["qty"]
+            buy_price = pos["buy_price"]
+            cmp_ = pos["cmp"]
+            beta = pos["beta"]
+            trade_value = pos["trade_value"]
+            buy_brokerage = pos["buy_brokerage"]
+            cash_leftover = pos["cash_leftover"]
+            dividend_cash = pos["dividend_cash"]
+            market_value = pos["market_value"]
+            current_value = pos["current_value"]
+            entry_available = pos["entry_available"]
+            entry_date_actual = pos["entry_date_actual"]
+            invested = allocated
 
         gross_profit = current_value - invested
-        brokerage = BROKERAGE_RATE * (invested + current_value)
-        taxable_gain = max(gross_profit - brokerage, 0)
-        tax = STCG_RATE * taxable_gain
-        net_profit = gross_profit - brokerage - tax
+        sell_brokerage = (market_value * BROKERAGE_RATE) if meta["class"] != "Debt" else 0.0
+
+        # Tax is deliberately NOT subtracted from the live portfolio value.
+        # It is calculated once at portfolio level below because the ₹1.25 lakh
+        # Section 112A exemption is an aggregate annual exemption, not a per-stock exemption.
+        estimated_tax = 0.0
+        net_if_sold_today = gross_profit - sell_brokerage
         cagr = (
             (current_value / invested) ** (1 / elapsed_years) - 1
             if invested > 0 and elapsed_years > 0 and current_value > 0
@@ -352,22 +419,43 @@ def compute_scenario(scenario_name):
         rows.append({
             "ticker": t, "name": meta["name"], "class": meta["class"],
             "sector": meta.get("sector", ""), "weight_pct": w_pct,
-            "allocated": allocated, "qty": qty, "buy_price": buy_price,
-            "cmp": cmp_, "invested": invested, "current_value": current_value,
-            "gross_profit": gross_profit, "brokerage": brokerage, "stcg": tax,
-            "net_profit": net_profit, "beta": beta, "cagr": cagr,
-            "entry_available": entry_available,
+            "allocated": allocated, "qty": qty, "effective_qty": effective_qty if meta["class"] != "Debt" else None,
+            "buy_price": buy_price, "cmp": cmp_, "invested": invested,
+            "trade_value": trade_value, "cash_leftover": cash_leftover,
+            "market_value": market_value, "dividend_cash": dividend_cash,
+            "current_value": current_value, "gross_profit": gross_profit,
+            "buy_brokerage": buy_brokerage, "sell_brokerage": sell_brokerage,
+            "estimated_tax": estimated_tax, "net_if_sold_today": net_if_sold_today,
+            "beta": beta, "cagr": cagr, "entry_available": entry_available,
+            "entry_date_actual": entry_date_actual,
         })
 
     df = pd.DataFrame(rows)
     inv_sum, cur_sum = df["invested"].sum(), df["current_value"].sum()
+    gross_total = df["gross_profit"].sum()
+    buy_brokerage_total = df["buy_brokerage"].sum()
+    sell_brokerage_total = df["sell_brokerage"].sum()
+
+    # A simple, transparent tax model for listed-equity gains. The exemption
+    # is applied ONCE to the portfolio, not once per company. For today's
+    # hypothetical sale, holdings are short-term because the investment date
+    # is only the fixed 01-Sep-2026 start. At the 3-year target they are long-term.
+    eq = df[df["class"] == "Equity"]
+    equity_capital_gain = (eq["market_value"] - eq["trade_value"] - eq["buy_brokerage"] - eq["sell_brokerage"]).sum()
+    current_equity_taxable = max(equity_capital_gain, 0.0)
+    current_tax = current_equity_taxable * (0.20 if elapsed_years < 1 else LTCG_RATE)
+    target_tax = max(equity_capital_gain - LTCG_EXEMPTION, 0.0) * LTCG_RATE
+
     kpis = {
         "current_value": cur_sum,
         "invested": inv_sum,
-        "gross_profit": df["gross_profit"].sum(),
-        "brokerage": df["brokerage"].sum(),
-        "stcg": df["stcg"].sum(),
-        "net_profit": df["net_profit"].sum(),
+        "gross_profit": gross_total,
+        "buy_brokerage": buy_brokerage_total,
+        "sell_brokerage": sell_brokerage_total,
+        "estimated_tax_today": current_tax,
+        "estimated_tax_target": target_tax,
+        "net_if_sold_today": gross_total - sell_brokerage_total - current_tax,
+        "net_target_if_same_gain": gross_total - sell_brokerage_total - target_tax,
         "net_return_pct": (cur_sum / inv_sum - 1) * 100 if inv_sum else 0.0,
         "weighted_beta": (df["weight_pct"] / 100 * df["beta"]).sum(),
         "target": sc["target"],
@@ -376,7 +464,6 @@ def compute_scenario(scenario_name):
         "days_to_target": max((TARGET_DATE - today).days, 0),
         "entry_date": INVESTMENT_DATE,
     }
-
     return df, kpis
 
 
@@ -396,46 +483,41 @@ def get_nifty_norm():
 
 @st.cache_data(ttl=900, show_spinner=False)
 def build_portfolio_index_series(scenario_name):
-    """Actual portfolio performance from 01-Sep-2026, not a historical 3-year lookback."""
+    """Portfolio total-value index starting at 100 on the investment date."""
     weights = SCENARIOS[scenario_name]["weights"]
     nifty_hist = fetch_history(BENCHMARK)
-
     if nifty_hist is None or nifty_hist.empty:
         return None
 
-    entry_date = get_entry_date(nifty_hist)
-    if entry_date is None:
+    nifty_entry = get_entry_date(nifty_hist)
+    if nifty_entry is None:
         return None
-
-    master_idx = nifty_hist.loc[entry_date:].index
-    elapsed_days = (master_idx - master_idx[0]).days.values
+    master_idx = nifty_hist.loc[nifty_entry:].index
     portfolio_rel = pd.Series(0.0, index=master_idx)
 
     for t, w_pct in weights.items():
         meta = ASSET_META[t]
         w = w_pct / 100.0
-
         if meta["class"] == "Debt":
-            rel = pd.Series(
-                (1 + meta["yield"]) ** (elapsed_days / 365.25),
-                index=master_idx
-            )
+            elapsed_days = (master_idx - master_idx[0]).days.values
+            rel = pd.Series((1 + meta["yield"]) ** (elapsed_days / 365.25), index=master_idx)
         else:
             hist = fetch_history(t)
-            if hist is not None and not hist.empty:
-                stock_entry = get_entry_date(hist)
-                if stock_entry is not None:
-                    s = hist.loc[stock_entry:, "Close"].reindex(master_idx, method="ffill")
-                    s = s.dropna()
-                    rel = s / s.iloc[0]
-                    rel = rel.reindex(master_idx).ffill().bfill()
-                else:
-                    rel = pd.Series(1.0, index=master_idx)
-            else:
-                # Missing live data is kept flat rather than fabricating a
-                # return from an unrelated historical fallback price.
+            entry = get_entry_date(hist) if hist is not None and not hist.empty else None
+            if entry is None:
                 rel = pd.Series(1.0, index=master_idx)
-
+            else:
+                h = hist.loc[entry:].copy()
+                prices = h["Close"].reindex(master_idx, method="ffill")
+                price_rel = prices / float(prices.iloc[0])
+                # Include cash dividends as a non-reinvested total-return component.
+                if "Dividends" in h.columns:
+                    div = h["Dividends"].fillna(0).reindex(master_idx, fill_value=0).fillna(0)
+                    cumulative_div = div.cumsum()
+                    rel = price_rel + (cumulative_div / float(prices.iloc[0]))
+                else:
+                    rel = price_rel
+                rel = rel.reindex(master_idx).ffill().bfill()
         portfolio_rel = portfolio_rel.add(rel * w, fill_value=0)
 
     return portfolio_rel * 100
@@ -471,10 +553,10 @@ def build_donut(df, scenario_name):
 
 
 def build_bar(df, scenario_name):
-    d = df.sort_values("net_profit")
-    colors = ["#188038" if v >= 0 else "#d93025" for v in d["net_profit"]]
-    fig = go.Figure(go.Bar(x=d["net_profit"], y=d["name"], orientation="h", marker_color=colors,
-                            text=[inr(v) for v in d["net_profit"]], textposition="outside"))
+    d = df.sort_values("gross_profit")
+    colors = ["#188038" if v >= 0 else "#d93025" for v in d["gross_profit"]]
+    fig = go.Figure(go.Bar(x=d["gross_profit"], y=d["name"], orientation="h", marker_color=colors,
+                            text=[inr(v) for v in d["gross_profit"]], textposition="outside"))
     fig.update_layout(title=f"Asset-wise Net Profit / Loss — {scenario_name}", height=520,
                        template="plotly_white", margin=dict(l=190, t=60))
     return fig
@@ -601,11 +683,11 @@ try:
     k1.metric("Portfolio Value Today", inr(kpis["current_value"]))
     k2.metric(f"Invested on {INVESTMENT_DATE.strftime('%d %b %Y')}", inr(kpis["invested"]))
     k3.metric("Gross Profit", inr(kpis["gross_profit"]))
-    k4.metric("Total Brokerage", inr(kpis["brokerage"]))
+    k4.metric("Buy Brokerage (Model)", inr(kpis["buy_brokerage"]))
 
     k5, k6, k7, k8 = st.columns(4)
-    k5.metric("Estimated Tax (Model)", inr(kpis["stcg"]))
-    k6.metric("Net Take-Home Profit", inr(kpis["net_profit"]))
+    k5.metric("Exit Brokerage (Model)", inr(kpis["sell_brokerage"]))
+    k6.metric("Estimated Tax If Sold Today", inr(kpis["estimated_tax_today"]))
     k7.metric("Net Portfolio Return", f"{kpis['net_return_pct']:.2f}%")
     k8.metric("Weighted Portfolio Beta", f"{kpis['weighted_beta']:.2f}")
 
@@ -614,6 +696,14 @@ try:
         f"📅 **Investment date:** {INVESTMENT_DATE.strftime('%d %b %Y')}  ·  "
         f"**3-year target date:** {TARGET_DATE.strftime('%d %b %Y')}  ·  "
         f"**Days remaining:** {kpis['days_to_target']:,}"
+    )
+    st.caption(
+        "Calculation logic: actual 01-Sep-2026 closing prices, whole shares, leftover cash, "
+        "cash dividends, and a 0.25% model brokerage. Taxes are shown only as a hypothetical "
+        "exit estimate; they are not deducted from today's unrealised portfolio value. "
+        "The 3-year target is evaluated on 01-Sep-2029. Capital-gains tax estimates exclude dividend-income tax and are not deducted from current value; "
+        f"current estimated equity tax if sold today: {inr(kpis['estimated_tax_today'])}. "
+        f"At the target, the model uses 12.5% LTCG above the single ₹1.25 lakh equity exemption: {inr(kpis['estimated_tax_target'])}."
     )
     if gap <= 0:
         st.success(
@@ -644,11 +734,11 @@ try:
     show["Buy Price"] = show["buy_price"].map(lambda v: "-" if v is None or pd.isna(v) else inr(v))
     show["CMP"] = show["cmp"].map(lambda v: "-" if v is None or pd.isna(v) else inr(v))
     show["Current Value"] = show["current_value"].map(inr)
-    show["Net Profit"] = show["net_profit"].map(inr)
+    show["Gross Profit"] = show["gross_profit"].map(inr)
     show["Return Since Entry"] = show.apply(lambda r: f"{((r["cmp"] / r["buy_price"] - 1) * 100):.2f}%" if pd.notna(r["buy_price"]) and r["buy_price"] else "-", axis=1)
     show["Beta"] = show["beta"].map(lambda v: f"{v:.2f}")
     cols = ["name", "class", "Weight %", "Allocated", "Qty", "Buy Price", "CMP",
-            "Current Value", "Net Profit", "Return Since Entry", "Beta"]
+            "Current Value", "Gross Profit", "Return Since Entry", "Beta"]
     st.dataframe(show[cols].rename(columns={"name": "Asset", "class": "Class"}),
                  width="stretch", hide_index=True)
 
