@@ -386,6 +386,7 @@ def compute_scenario(scenario_name):
             market_value = current_value
             entry_available = True
             entry_date_actual = INVESTMENT_DATE
+            effective_qty = None
         else:
             pos = calculate_equity_position(t, allocated)
             qty = pos["qty"]
@@ -400,6 +401,7 @@ def compute_scenario(scenario_name):
             current_value = pos["current_value"]
             entry_available = pos["entry_available"]
             entry_date_actual = pos["entry_date_actual"]
+            effective_qty = pos["effective_qty"]
             invested = allocated
 
         gross_profit = current_value - invested
