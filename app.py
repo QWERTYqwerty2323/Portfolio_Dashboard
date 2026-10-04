@@ -605,6 +605,19 @@ st.session_state.report_selection = selected_option
 is_live_mode = selected_option == LIVE_OPTION
 selected_date = None if is_live_mode else selected_option
 
+# Keep the historical-report summary inside the 3x selector column.
+with selector_col:
+    if not is_live_mode:
+        report_label_preview = format_report_date(selected_date)
+        if pd.Timestamp(selected_date) < INVESTMENT_DATE:
+            st.error("The selected report date is before the 1 September 2026 investment date.")
+            st.stop()
+        st.info(
+            f"📌 **Historical report as on {report_label_preview}** | "
+            f"Investment date: **01 Sep 2026** | Target date: **01 Sep 2029** | "
+            f"Elapsed: **{max((pd.Timestamp(selected_date) - INVESTMENT_DATE).days, 0)} days**"
+        )
+
 with status_col:
     if is_live_mode:
         st.markdown("**🟢 LIVE DATA**")
@@ -633,11 +646,6 @@ if is_live_mode:
     report_label = "LIVE — Latest Available"
 else:
     report_label = format_report_date(selected_date)
-    if pd.Timestamp(selected_date) < INVESTMENT_DATE:
-        st.error("The selected report date is before the 1 September 2026 investment date.")
-        st.stop()
-    st.info(f"📌 **Historical report as on {report_label}** | Investment date: **01 Sep 2026** | "
-            f"Target date: **01 Sep 2029** | Elapsed: **{max((pd.Timestamp(selected_date) - INVESTMENT_DATE).days, 0)} days**")
 
 # -----------------------------------------------------------------------------
 # 8. UI — SCENARIO BUTTONS
