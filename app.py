@@ -574,7 +574,8 @@ with st.expander("📡 Data source status (tap to check live vs. offline-fallbac
 
 # Build the report-date dropdown from actual NSE/Nifty trading sessions.
 # Fresh start defaults to LIVE. Selecting a date switches the whole dashboard
-# into historical/as-of mode. The button below returns to live mode.
+# into historical/as-of mode. The selector and live/status controls are kept
+# side-by-side in a 3:2 layout.
 report_dates = get_report_dates()
 if not report_dates:
     st.error("Unable to load weekly NSE trading dates. Please refresh after Yahoo Finance data becomes available.")
@@ -586,29 +587,50 @@ report_options = [LIVE_OPTION] + report_dates
 if "report_selection" not in st.session_state:
     st.session_state.report_selection = LIVE_OPTION
 
-selected_option = st.selectbox(
-    "📅 Weekly Performance Report — Select a Last Working / Trading Day",
-    options=report_options,
-    index=report_options.index(st.session_state.report_selection) if st.session_state.report_selection in report_options else 0,
-    format_func=lambda d: d if isinstance(d, str) else format_report_date(d),
-    help="Fresh start shows live/latest available market data. Select any historical weekly date to see the complete dashboard exactly as of that date."
-)
+# 3:2 layout: report-date dropdown on the left, live/status controls on the right.
+selector_col, status_col = st.columns([3, 2], gap="large")
+
+with selector_col:
+    selected_option = st.selectbox(
+        "📅 Weekly Performance Report — Select a Last Working / Trading Day",
+        options=report_options,
+        index=report_options.index(st.session_state.report_selection) if st.session_state.report_selection in report_options else 0,
+        format_func=lambda d: d if isinstance(d, str) else format_report_date(d),
+        help="Fresh start shows live/latest available market data. Select any historical weekly date to see the complete dashboard exactly as of that date."
+    )
+
 st.session_state.report_selection = selected_option
 
 # Live mode is represented internally by None. Historical mode uses the selected date.
 is_live_mode = selected_option == LIVE_OPTION
 selected_date = None if is_live_mode else selected_option
 
-# Explicit one-click way back to live data after viewing a historical report.
-if not is_live_mode:
-    if st.button("↩️ Back to Live Data", type="primary", width="stretch",
-                 help="Return the entire dashboard to the latest available market data."):
-        st.session_state.report_selection = LIVE_OPTION
-        st.rerun()
+with status_col:
+    if is_live_mode:
+        st.markdown("**🟢 LIVE DATA**")
+        st.caption("Showing the latest available market data. Select a weekly date on the left to generate a historical report.")
+        st.button(
+            "🟢 Live Data (Current)",
+            type="primary",
+            width="stretch",
+            disabled=True,
+            help="The dashboard is already showing the latest available market data."
+        )
+    else:
+        report_label_preview = format_report_date(selected_date)
+        st.markdown(f"**📊 Historical Report: {report_label_preview}**")
+        st.caption("The entire dashboard is calculated as of the selected last working/trading day.")
+        if st.button(
+            "↩️ Back to Live Data",
+            type="primary",
+            width="stretch",
+            help="Return the entire dashboard to the latest available market data."
+        ):
+            st.session_state.report_selection = LIVE_OPTION
+            st.rerun()
 
 if is_live_mode:
     report_label = "LIVE — Latest Available"
-    st.success("🟢 **Live mode:** showing the latest available market data. Select a weekly date above to generate a historical report.")
 else:
     report_label = format_report_date(selected_date)
     if pd.Timestamp(selected_date) < INVESTMENT_DATE:
