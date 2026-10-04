@@ -293,8 +293,10 @@ def format_report_date(d):
     return pd.Timestamp(d).strftime("%d %b %Y")
 
 
-def elapsed_years(as_of_date):
-    days = max((pd.Timestamp(as_of_date) - INVESTMENT_DATE).days, 0)
+def elapsed_years(as_of_date=None):
+    # None means live mode: use today's calendar date for time-based assets.
+    target = pd.Timestamp.today().normalize() if as_of_date is None else pd.Timestamp(as_of_date).normalize()
+    days = max((target - INVESTMENT_DATE).days, 0)
     return days / 365.25
 
 
@@ -369,7 +371,7 @@ def get_price_series(t, as_of_date=None):
 @st.cache_data(ttl=900, show_spinner=False)
 def compute_scenario(scenario_name, as_of_date):
     sc = SCENARIOS[scenario_name]
-    as_of = pd.Timestamp(as_of_date).normalize()
+    as_of = pd.Timestamp.today().normalize() if as_of_date is None else pd.Timestamp(as_of_date).normalize()
     years = elapsed_years(as_of)
     rows = []
 
@@ -443,7 +445,8 @@ def build_portfolio_index_series(scenario_name, as_of_date):
     nifty_hist = fetch_history(BENCHMARK)
     if nifty_hist is None or nifty_hist.empty:
         return None, None
-    nifty_hist = slice_as_of(nifty_hist, as_of_date)
+    if as_of_date is not None:
+        nifty_hist = slice_as_of(nifty_hist, as_of_date)
     nifty_hist = slice_from_date(nifty_hist, INVESTMENT_DATE)
     if nifty_hist is None or nifty_hist.empty:
         return None, None
@@ -460,7 +463,7 @@ def build_portfolio_index_series(scenario_name, as_of_date):
             rel = pd.Series((1 + meta["yield"]) ** (days / 365.25), index=master_idx)
         else:
             hist = fetch_history(t)
-            h = slice_as_of(hist, as_of_date)
+            h = slice_as_of(hist, as_of_date) if as_of_date is not None else hist
             h = slice_from_date(h, INVESTMENT_DATE) if h is not None else None
             if h is not None and not h.empty:
                 s = h["Close"].reindex(master_idx).ffill().bfill()
@@ -529,7 +532,8 @@ def build_line(scenario_name, as_of_date):
                                  name="Nifty 50", line=dict(color="#e37400", width=2, dash="dot")))
     else:
         fig.add_annotation(text="Historical benchmark data unavailable", showarrow=False)
-    fig.update_layout(title=f"Portfolio vs Nifty 50: 1-Sep-2026 to {format_report_date(as_of_date)} (Base = 100) — {scenario_name}",
+    end_label = "Latest Available" if as_of_date is None else format_report_date(as_of_date)
+    fig.update_layout(title=f"Portfolio vs Nifty 50: 1-Sep-2026 to {end_label} (Base = 100) — {scenario_name}",
                       template="plotly_white", height=420, xaxis_title="Date", yaxis_title="Indexed Value")
     return fig
 
@@ -537,7 +541,8 @@ def build_line(scenario_name, as_of_date):
 def build_dma_chart(ticker, as_of_date):
     meta = ASSET_META[ticker]
     hist = fetch_history(ticker)
-    hist = slice_as_of(hist, as_of_date)
+    if as_of_date is not None:
+        hist = slice_as_of(hist, as_of_date)
     fig = go.Figure()
     if hist is not None and not hist.empty:
         dma50, dma200 = hist["Close"].rolling(50).mean(), hist["Close"].rolling(200).mean()
@@ -546,7 +551,8 @@ def build_dma_chart(ticker, as_of_date):
         fig.add_trace(go.Scatter(x=hist.index, y=dma200, name="200 DMA", line=dict(color="#d93025", width=1.3)))
     else:
         fig.add_annotation(text="Historical chart unavailable", showarrow=False)
-    fig.update_layout(title=f"{meta['name']} — Price & 50/200 DMA as of {format_report_date(as_of_date)}",
+    end_label = "Latest Available" if as_of_date is None else format_report_date(as_of_date)
+    fig.update_layout(title=f"{meta['name']} — Price & 50/200 DMA as of {end_label}",
                       template="plotly_white", height=430, xaxis=dict(rangeslider=dict(visible=True)))
     return fig
 
@@ -567,30 +573,49 @@ with st.expander("📡 Data source status (tap to check live vs. offline-fallbac
         status_cols[i % 4].write(f"{'🟢' if ok else '🟡'} {ASSET_META[t]['name']}")
 
 # Build the report-date dropdown from actual NSE/Nifty trading sessions.
+# Fresh start defaults to LIVE. Selecting a date switches the whole dashboard
+# into historical/as-of mode. The button below returns to live mode.
 report_dates = get_report_dates()
 if not report_dates:
     st.error("Unable to load weekly NSE trading dates. Please refresh after Yahoo Finance data becomes available.")
     st.stop()
 
-if "report_date" not in st.session_state or st.session_state.report_date not in report_dates:
-    st.session_state.report_date = report_dates[-1]
+LIVE_OPTION = "🟢 LIVE — Latest Available Market Data"
+report_options = [LIVE_OPTION] + report_dates
 
-selected_date = st.selectbox(
-    "📅 Weekly Performance Report — Last Working / Trading Day of Week",
-    options=report_dates,
-    index=report_dates.index(st.session_state.report_date),
-    format_func=format_report_date,
-    help="Each option is the actual last NSE/Nifty trading day in that week. Holiday-shortened weeks are handled automatically."
+if "report_selection" not in st.session_state:
+    st.session_state.report_selection = LIVE_OPTION
+
+selected_option = st.selectbox(
+    "📅 Weekly Performance Report — Select a Last Working / Trading Day",
+    options=report_options,
+    index=report_options.index(st.session_state.report_selection) if st.session_state.report_selection in report_options else 0,
+    format_func=lambda d: d if isinstance(d, str) else format_report_date(d),
+    help="Fresh start shows live/latest available market data. Select any historical weekly date to see the complete dashboard exactly as of that date."
 )
-st.session_state.report_date = selected_date
-report_label = format_report_date(selected_date)
+st.session_state.report_selection = selected_option
 
-if pd.Timestamp(selected_date) < INVESTMENT_DATE:
-    st.error("The selected report date is before the 1 September 2026 investment date.")
-    st.stop()
+# Live mode is represented internally by None. Historical mode uses the selected date.
+is_live_mode = selected_option == LIVE_OPTION
+selected_date = None if is_live_mode else selected_option
 
-st.info(f"📌 **Report as on {report_label}** | Investment date: **01 Sep 2026** | "
-        f"Target date: **01 Sep 2029** | Elapsed: **{max((pd.Timestamp(selected_date) - INVESTMENT_DATE).days, 0)} days**")
+# Explicit one-click way back to live data after viewing a historical report.
+if not is_live_mode:
+    if st.button("↩️ Back to Live Data", type="primary", width="stretch",
+                 help="Return the entire dashboard to the latest available market data."):
+        st.session_state.report_selection = LIVE_OPTION
+        st.rerun()
+
+if is_live_mode:
+    report_label = "LIVE — Latest Available"
+    st.success("🟢 **Live mode:** showing the latest available market data. Select a weekly date above to generate a historical report.")
+else:
+    report_label = format_report_date(selected_date)
+    if pd.Timestamp(selected_date) < INVESTMENT_DATE:
+        st.error("The selected report date is before the 1 September 2026 investment date.")
+        st.stop()
+    st.info(f"📌 **Historical report as on {report_label}** | Investment date: **01 Sep 2026** | "
+            f"Target date: **01 Sep 2029** | Elapsed: **{max((pd.Timestamp(selected_date) - INVESTMENT_DATE).days, 0)} days**")
 
 # -----------------------------------------------------------------------------
 # 8. UI — SCENARIO BUTTONS
@@ -633,7 +658,7 @@ try:
     # Target is a 3-year terminal objective, not an achievement today.
     target_gap = kpis["target"] - kpis["current_value"]
     target_progress = (kpis["current_value"] / kpis["target"] * 100) if kpis["target"] else 0
-    if pd.Timestamp(selected_date) >= TARGET_DATE:
+    if not is_live_mode and pd.Timestamp(selected_date) >= TARGET_DATE:
         if target_gap <= 0:
             st.success(f"3-Year Target {inr(kpis['target'])} — achieved / exceeded ✅")
         else:
