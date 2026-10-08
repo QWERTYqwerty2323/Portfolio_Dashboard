@@ -23,6 +23,7 @@ import concurrent.futures as cf
 from datetime import datetime, timedelta
 
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
@@ -234,8 +235,8 @@ with st.spinner("Fetching live NSE market data (falls back automatically if Yaho
 # -----------------------------------------------------------------------------
 # 4. PRICE / REPORT-DATE HELPERS
 # -----------------------------------------------------------------------------
-INVESTMENT_DATE = pd.Timestamp("2026-09-01")
-TARGET_DATE = pd.Timestamp("2029-09-01")
+INVESTMENT_DATE = pd.Timestamp("2026-08-01")
+TARGET_DATE = pd.Timestamp("2029-08-01")
 
 
 def _date_index(hist):
@@ -274,7 +275,7 @@ def slice_from_date(hist, start_date):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_report_dates():
-    """Return the actual last trading day of each week from 1-Sep-2026 onward."""
+    """Return the actual last trading day of each week from 1-Aug-2026 onward."""
     hist = fetch_history(BENCHMARK)
     if hist is None or hist.empty:
         return []
@@ -301,7 +302,7 @@ def elapsed_years(as_of_date=None):
 
 
 def find_entry_row(hist):
-    """Find the first available trading day on/after 1-Sep-2026."""
+    """Find the first available trading day on/after 1-Aug-2026."""
     h = slice_from_date(hist, INVESTMENT_DATE)
     if h is None or h.empty:
         return None
@@ -441,7 +442,7 @@ def compute_scenario(scenario_name, as_of_date):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def build_portfolio_index_series(scenario_name, as_of_date):
-    """Portfolio growth from the fixed 1-Sep-2026 investment date to report date."""
+    """Portfolio growth from the fixed 1-Aug-2026 investment date to report date."""
     nifty_hist = fetch_history(BENCHMARK)
     if nifty_hist is None or nifty_hist.empty:
         return None, None
@@ -482,6 +483,39 @@ def build_portfolio_index_series(scenario_name, as_of_date):
     nifty_norm = nifty_close / nifty_close.iloc[0] * 100
     return portfolio_index, nifty_norm
 
+
+
+def safe_float(value, default=None):
+    """Safely convert Yahoo Finance values to float."""
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+        value = float(value)
+        if pd.isna(value) or not np.isfinite(value):
+            return default
+        return value
+    except Exception:
+        return default
+
+
+def safe_metric_number(value):
+    """Return a numeric value or None for Streamlit metrics."""
+    return safe_float(value, None)
+
+
+def format_cr(value):
+    """Format market capitalization expressed in crore."""
+    value = safe_float(value, None)
+    if value is None:
+        return "N/A"
+    return f"₹{value:,.0f} Cr"
+
+
+def format_price(value):
+    value = safe_float(value, None)
+    return inr(value) if value is not None else "N/A"
 
 def valuation_status(pe, sector):
     avg = INDUSTRY_AVG_PE.get(sector)
@@ -533,7 +567,7 @@ def build_line(scenario_name, as_of_date):
     else:
         fig.add_annotation(text="Historical benchmark data unavailable", showarrow=False)
     end_label = "Latest Available" if as_of_date is None else format_report_date(as_of_date)
-    fig.update_layout(title=f"Portfolio vs Nifty 50: 1-Sep-2026 to {end_label} (Base = 100) — {scenario_name}",
+    fig.update_layout(title=f"Portfolio vs Nifty 50: 1-Aug-2026 to {end_label} (Base = 100) — {scenario_name}",
                       template="plotly_white", height=420, xaxis_title="Date", yaxis_title="Indexed Value")
     return fig
 
@@ -561,7 +595,7 @@ def build_dma_chart(ticker, as_of_date):
 # 7. UI — HEADER + REPORT DATE SELECTOR
 # -----------------------------------------------------------------------------
 st.title("🇮🇳 3-Year Indian Equity Portfolio Dashboard")
-st.caption("₹1 Crore capital · 15-asset universe · Fixed investment date: 1 September 2026 · 3-year target: 1 September 2029")
+st.caption("₹1 Crore capital · 15-asset universe · Fixed investment date: 1 August 2026 · 3-year target: 1 August 2029")
 
 with st.expander("📡 Data source status (tap to check live vs. offline-fallback)"):
     live_flags = {t: (fetch_history(t) is not None) for t in YF_TICKERS}
@@ -610,11 +644,11 @@ with selector_col:
     if not is_live_mode:
         report_label_preview = format_report_date(selected_date)
         if pd.Timestamp(selected_date) < INVESTMENT_DATE:
-            st.error("The selected report date is before the 1 September 2026 investment date.")
+            st.error("The selected report date is before the 1 August 2026 investment date.")
             st.stop()
         st.info(
             f"📌 **Historical report as on {report_label_preview}** | "
-            f"Investment date: **01 Sep 2026** | Target date: **01 Sep 2029** | "
+            f"Investment date: **01 Aug 2026** | Target date: **01 Sep 2029** | "
             f"Elapsed: **{max((pd.Timestamp(selected_date) - INVESTMENT_DATE).days, 0)} days**"
         )
 
@@ -682,7 +716,7 @@ try:
     k5, k6, k7, k8 = st.columns(4)
     k5.metric("Estimated STCG Tax (20%)", inr(kpis["stcg"]))
     k6.metric("Net Profit After Costs", inr(kpis["net_profit"]))
-    k7.metric("Net Return Since 01-Sep-2026", f"{kpis['net_return_pct']:.2f}%")
+    k7.metric("Net Return Since 01-Aug-2026", f"{kpis['net_return_pct']:.2f}%")
     k8.metric("Weighted Portfolio Beta", f"{kpis['weighted_beta']:.2f}")
 
     # Target is a 3-year terminal objective, not an achievement today.
@@ -712,14 +746,14 @@ try:
     show["Weight %"] = show["weight_pct"].map(lambda v: f"{v:.1f}%")
     show["Allocated"] = show["allocated"].map(inr)
     show["Qty"] = show["qty"].map(lambda v: "-" if v is None or pd.isna(v) else f"{int(v):,}")
-    show["Buy Price (01-Sep-2026)"] = show["buy_price"].map(lambda v: "-" if v is None or pd.isna(v) else inr(v))
+    show["Buy Price (01-Aug-2026)"] = show["buy_price"].map(lambda v: "-" if v is None or pd.isna(v) else inr(v))
     show["Price on Report Date"] = show["cmp"].map(lambda v: "-" if v is None or pd.isna(v) else inr(v))
     show["Current Value"] = show["current_value"].map(inr)
     show["Gross P/L"] = show["gross_profit"].map(inr)
     show["Net Profit"] = show["net_profit"].map(inr)
     show["CAGR"] = show["cagr"].map(lambda v: f"{v * 100:.2f}%")
     show["Beta"] = show["beta"].map(lambda v: f"{v:.2f}")
-    cols = ["name", "class", "Weight %", "Allocated", "Qty", "Buy Price (01-Sep-2026)",
+    cols = ["name", "class", "Weight %", "Allocated", "Qty", "Buy Price (01-Aug-2026)",
             "Price on Report Date", "Current Value", "Gross P/L", "Net Profit", "CAGR", "Beta"]
     st.dataframe(show[cols].rename(columns={"name": "Asset", "class": "Class"}),
                  width="stretch", hide_index=True)
@@ -729,52 +763,851 @@ except Exception as e:
     st.exception(e)
 
 # -----------------------------------------------------------------------------
-# 9. UI — COMPANY DEEP-DIVE SCREENER
+# 9. UI — COMPANY ANALYSIS
 # -----------------------------------------------------------------------------
 st.divider()
-st.header("🔎 Company Deep-Dive Screener")
+st.header("🔎 Company Analysis")
 
 try:
     ticker = st.selectbox(
         "Select Company",
         options=EQUITY_TICKERS,
         format_func=lambda t: ASSET_META[t]["name"],
+        key="company_analysis_ticker",
     )
 
     meta = ASSET_META[ticker]
     p = get_price_series(ticker, selected_date)
-    info, fb = p["info"], FALLBACK_DATA.get(ticker, {})
-    cmp_, hist = p["cmp"], fetch_history(ticker)
+    info = p.get("info") or {}
+    fb = FALLBACK_DATA.get(ticker, {})
+    cmp_ = safe_float(p.get("cmp"), fb.get("cmp"))
+    hist = fetch_history(ticker)
 
-    pe = info.get("trailingPE") or fb.get("pe")
-    eps = info.get("trailingEps") or fb.get("eps")
-    mcap = info.get("marketCap")
-    mcap_cr = (mcap / 1e7) if mcap else fb.get("mcap_cr")
-    beta = p["beta"]
-    low52 = info.get("fiftyTwoWeekLow") or p["low52"]
-    high52 = info.get("fiftyTwoWeekHigh") or p["high52"]
+    # Yahoo fundamentals are not point-in-time; they are shown as latest
+    # available fundamentals even when the dashboard is in historical mode.
+    pe = safe_float(info.get("trailingPE"), fb.get("pe"))
+    eps = safe_float(info.get("trailingEps"), fb.get("eps"))
+    mcap = safe_float(info.get("marketCap"), None)
+    mcap_cr = (mcap / 1e7) if mcap is not None else safe_float(fb.get("mcap_cr"))
+    beta = safe_float(p.get("beta"), fb.get("beta", 1.0))
+    low52 = safe_float(info.get("fiftyTwoWeekLow"), p.get("low52"))
+    high52 = safe_float(info.get("fiftyTwoWeekHigh"), p.get("high52"))
+    roe = safe_float(info.get("returnOnEquity"), None)
+    pb = safe_float(info.get("priceToBook"), None)
+    debt_to_equity = safe_float(info.get("debtToEquity"), None)
 
     st.subheader(f"{meta['name']} ({ticker})")
-    st.caption(f"{meta['sector']} — Price data as of **{report_label}** — "
-               f"{'Live Yahoo history' if p['live'] else 'Offline fallback'}")
+    st.caption(
+        f"{meta['sector']} — Price data as of **{report_label}** — "
+        f"{'Live Yahoo history' if p.get('live') else 'Offline fallback'}"
+    )
 
+    # ------------------------ KPI CARDS ------------------------
     d1, d2, d3, d4 = st.columns(4)
-    d1.metric("Price on Report Date", inr(cmp_), f"{p.get('day_change_pct', 0):+.2f}% vs previous trading day")
-    d2.metric("Market Cap", ("₹" + format(mcap_cr, ",.0f") + " Cr") if mcap_cr else "N/A")
-    d3.metric("Trailing P/E", f"{pe:.1f}x" if pe else "N/A")
-    d4.metric("Beta", f"{beta:.2f}")
 
-    d5, d6 = st.columns(2)
-    d5.metric("Trailing EPS", f"₹{eps:.2f}" if eps else "N/A")
-    d6.metric("52W Range", f"{inr(low52)} – {inr(high52)}")
+    day_change = safe_float(
+        p.get("day_change_pct"),
+        0.0
+    )
 
-    st.caption("⚠️ P/E, EPS, market cap and valuation are the latest fundamentals supplied by Yahoo Finance; "
-               "Yahoo does not reliably provide point-in-time historical fundamentals. Price, return and chart data are as of the selected report date.")
-    st.markdown(f"**Valuation Status (latest fundamentals):** {valuation_status(pe, meta['sector'])}")
-    st.markdown(meta["thesis"])
+    d1.metric(
+        "Price on Report Date",
+        format_price(cmp_),
+        f"{day_change:+.2f}% vs previous trading day"
+    )
 
-    st.plotly_chart(build_dma_chart(ticker, selected_date), width="stretch")
+    d2.metric(
+        "Market Cap",
+        format_cr(mcap_cr)
+    )
+
+    d3.metric(
+        "Trailing P/E",
+        f"{pe:.1f}x" if pe is not None else "N/A"
+    )
+
+    d4.metric(
+        "Beta",
+        f"{beta:.2f}" if beta is not None else "N/A"
+    )
+
+    d5, d6, d7, d8 = st.columns(4)
+
+    d5.metric(
+        "Trailing EPS",
+        f"₹{eps:.2f}" if eps is not None else "N/A"
+    )
+
+    d6.metric(
+        "52W Range",
+        f"{format_price(low52)} – {format_price(high52)}"
+    )
+
+    d7.metric(
+        "ROE",
+        f"{roe * 100:.2f}%" if roe is not None else "N/A"
+    )
+
+    d8.metric(
+        "Price / Book",
+        f"{pb:.2f}x" if pb is not None else "N/A"
+    )
+
+    # ------------------------ RETURNS ------------------------
+    st.subheader("📈 Price Performance")
+
+    return_periods = {
+        "1 Month": 21,
+        "3 Months": 63,
+        "6 Months": 126,
+        "1 Year": 252,
+        "3 Years": 756,
+    }
+
+    return_rows = []
+
+    analysis_hist = hist
+
+    if analysis_hist is not None and not analysis_hist.empty:
+        if selected_date is not None:
+            analysis_hist = slice_as_of(
+                analysis_hist,
+                selected_date
+            )
+
+        if analysis_hist is not None and not analysis_hist.empty:
+            close = analysis_hist["Close"].dropna()
+
+            for label, days in return_periods.items():
+                if len(close) > days:
+                    start_price = safe_float(
+                        close.iloc[-days - 1],
+                        None
+                    )
+                    end_price = safe_float(
+                        close.iloc[-1],
+                        None
+                    )
+
+                    if (
+                        start_price is not None
+                        and end_price is not None
+                        and start_price > 0
+                    ):
+                        ret = (
+                            end_price /
+                            start_price -
+                            1
+                        ) * 100
+                    else:
+                        ret = None
+                else:
+                    ret = None
+
+                return_rows.append({
+                    "Period": label,
+                    "Return": ret
+                })
+
+    if return_rows:
+        ret_df = pd.DataFrame(return_rows)
+
+        rc = st.columns(len(ret_df))
+
+        for i, row in ret_df.iterrows():
+            value = row["Return"]
+            rc[i].metric(
+                row["Period"],
+                f"{value:+.2f}%" if pd.notna(value) else "N/A"
+            )
+    else:
+        st.info(
+            "Insufficient historical price data to calculate returns."
+        )
+
+    # ------------------------ PRICE + DMA CHART ------------------------
+    st.subheader("📊 Price & Moving Averages")
+
+    st.plotly_chart(
+        build_dma_chart(
+            ticker,
+            selected_date
+        ),
+        width="stretch"
+    )
+
+    # ------------------------ FUNDAMENTALS ------------------------
+    st.subheader("📋 Fundamental Snapshot")
+
+    fundamentals_df = pd.DataFrame({
+        "Metric": [
+            "Trailing P/E",
+            "Price / Book",
+            "Trailing EPS",
+            "ROE",
+            "Debt / Equity",
+            "Beta",
+            "Market Cap"
+        ],
+        "Value": [
+            f"{pe:.2f}x" if pe is not None else "N/A",
+            f"{pb:.2f}x" if pb is not None else "N/A",
+            f"₹{eps:.2f}" if eps is not None else "N/A",
+            f"{roe * 100:.2f}%" if roe is not None else "N/A",
+            f"{debt_to_equity:.2f}" if debt_to_equity is not None else "N/A",
+            f"{beta:.2f}" if beta is not None else "N/A",
+            format_cr(mcap_cr),
+        ]
+    })
+
+    st.dataframe(
+        fundamentals_df,
+        width="stretch",
+        hide_index=True
+    )
+
+    # ------------------------ VALUATION ------------------------
+    st.subheader("💡 Valuation & Investment Thesis")
+
+    valuation_text = valuation_status(
+        pe,
+        meta["sector"]
+    )
+
+    st.markdown(
+        f"**Valuation Status:** {valuation_text}"
+    )
+
+    st.markdown(
+        f"**Investment Thesis:** {meta['thesis']}"
+    )
+
+    st.caption(
+        "⚠️ P/E, EPS, market cap, ROE and other fundamentals "
+        "are the latest fundamentals supplied by Yahoo Finance. "
+        "Yahoo Finance does not reliably provide point-in-time "
+        "historical fundamentals. Price, return and chart data "
+        "are calculated as of the selected report date."
+    )
 
 except Exception as e:
-    st.error("Something went wrong rendering the company screener. Details below:")
+    st.error(
+        "Company Analysis could not be loaded."
+    )
     st.exception(e)
+
+
+# -----------------------------------------------------------------------------
+# 10. OVERALL PORTFOLIO PERFORMANCE
+# -----------------------------------------------------------------------------
+st.divider()
+st.header("📊 Overall Portfolio Performance")
+
+try:
+    performance_series, nifty_series = build_portfolio_index_series(
+        scenario_name,
+        selected_date
+    )
+
+    if (
+        performance_series is not None
+        and nifty_series is not None
+        and not performance_series.empty
+        and not nifty_series.empty
+    ):
+        perf_df = pd.DataFrame({
+            "Portfolio": performance_series,
+            "NIFTY 50": nifty_series
+        }).dropna()
+
+        # ---- Chart 1: Growth of ₹100 ----
+        growth_fig = go.Figure()
+
+        growth_fig.add_trace(
+            go.Scatter(
+                x=perf_df.index,
+                y=perf_df["Portfolio"],
+                mode="lines",
+                name="Portfolio",
+                line=dict(
+                    color="#1a73e8",
+                    width=2.5
+                )
+            )
+        )
+
+        growth_fig.add_trace(
+            go.Scatter(
+                x=perf_df.index,
+                y=perf_df["NIFTY 50"],
+                mode="lines",
+                name="NIFTY 50",
+                line=dict(
+                    color="#e37400",
+                    width=2,
+                    dash="dot"
+                )
+            )
+        )
+
+        growth_fig.update_layout(
+            title=(
+                f"Overall Portfolio Performance vs NIFTY 50 "
+                f"— Base ₹100 — {scenario_name}"
+            ),
+            xaxis_title="Date",
+            yaxis_title="Indexed Value",
+            template="plotly_white",
+            height=450,
+            hovermode="x unified"
+        )
+
+        st.plotly_chart(
+            growth_fig,
+            width="stretch"
+        )
+
+        # ---- Chart 2: Cumulative Returns ----
+        cumulative_portfolio = (
+            perf_df["Portfolio"] /
+            perf_df["Portfolio"].iloc[0] -
+            1
+        ) * 100
+
+        cumulative_nifty = (
+            perf_df["NIFTY 50"] /
+            perf_df["NIFTY 50"].iloc[0] -
+            1
+        ) * 100
+
+        cumulative_fig = go.Figure()
+
+        cumulative_fig.add_trace(
+            go.Scatter(
+                x=perf_df.index,
+                y=cumulative_portfolio,
+                mode="lines",
+                name="Portfolio Return",
+                line=dict(
+                    color="#188038",
+                    width=2.3
+                )
+            )
+        )
+
+        cumulative_fig.add_trace(
+            go.Scatter(
+                x=perf_df.index,
+                y=cumulative_nifty,
+                mode="lines",
+                name="NIFTY 50 Return",
+                line=dict(
+                    color="#9334e6",
+                    width=2,
+                    dash="dot"
+                )
+            )
+        )
+
+        cumulative_fig.update_layout(
+            title="Cumulative Return Comparison",
+            xaxis_title="Date",
+            yaxis_title="Cumulative Return (%)",
+            template="plotly_white",
+            height=420,
+            hovermode="x unified"
+        )
+
+        st.plotly_chart(
+            cumulative_fig,
+            width="stretch"
+        )
+
+        # ---- Chart 3: Drawdown ----
+        portfolio_drawdown = (
+            perf_df["Portfolio"] /
+            perf_df["Portfolio"].cummax() -
+            1
+        ) * 100
+
+        drawdown_fig = go.Figure()
+
+        drawdown_fig.add_trace(
+            go.Scatter(
+                x=perf_df.index,
+                y=portfolio_drawdown,
+                mode="lines",
+                name="Portfolio Drawdown",
+                fill="tozeroy",
+                line=dict(
+                    color="#d93025",
+                    width=1.8
+                )
+            )
+        )
+
+        drawdown_fig.update_layout(
+            title="Portfolio Drawdown",
+            xaxis_title="Date",
+            yaxis_title="Drawdown (%)",
+            template="plotly_white",
+            height=380,
+            hovermode="x unified"
+        )
+
+        st.plotly_chart(
+            drawdown_fig,
+            width="stretch"
+        )
+
+        # ---- Performance Summary ----
+        final_portfolio = safe_float(
+            perf_df["Portfolio"].iloc[-1],
+            None
+        )
+        final_nifty = safe_float(
+            perf_df["NIFTY 50"].iloc[-1],
+            None
+        )
+
+        if (
+            final_portfolio is not None
+            and final_nifty is not None
+        ):
+            portfolio_return = (
+                final_portfolio - 100
+            )
+
+            nifty_return = (
+                final_nifty - 100
+            )
+
+            outperformance = (
+                portfolio_return -
+                nifty_return
+            )
+
+            s1, s2, s3 = st.columns(3)
+
+            s1.metric(
+                "Portfolio Return",
+                f"{portfolio_return:+.2f}%"
+            )
+
+            s2.metric(
+                "NIFTY 50 Return",
+                f"{nifty_return:+.2f}%"
+            )
+
+            s3.metric(
+                "Outperformance",
+                f"{outperformance:+.2f}%"
+            )
+
+    else:
+        st.warning(
+            "Overall portfolio performance history is not available "
+            "because sufficient market history could not be retrieved."
+        )
+
+except Exception as e:
+    st.error(
+        "Overall portfolio performance charts could not be loaded."
+    )
+    st.exception(e)
+
+
+# -----------------------------------------------------------------------------
+# 11. COMPANY COMPARISON
+# -----------------------------------------------------------------------------
+st.divider()
+st.header("⚖️ Company Comparison")
+
+try:
+    comparison_tickers = st.multiselect(
+        "Select 2–6 companies to compare",
+        options=EQUITY_TICKERS,
+        default=EQUITY_TICKERS[:4],
+        format_func=lambda t: ASSET_META[t]["name"],
+        key="comparison_tickers",
+    )
+
+    if len(comparison_tickers) < 2:
+        st.info(
+            "Please select at least two companies."
+        )
+    else:
+        comparison_rows = []
+
+        for ticker in comparison_tickers:
+            meta = ASSET_META[ticker]
+            p = get_price_series(
+                ticker,
+                selected_date
+            )
+            info = p.get("info") or {}
+            fb = FALLBACK_DATA.get(
+                ticker,
+                {}
+            )
+
+            cmp_ = safe_float(
+                p.get("cmp"),
+                fb.get("cmp")
+            )
+
+            pe = safe_float(
+                info.get("trailingPE"),
+                fb.get("pe")
+            )
+
+            eps = safe_float(
+                info.get("trailingEps"),
+                fb.get("eps")
+            )
+
+            mcap = safe_float(
+                info.get("marketCap"),
+                None
+            )
+
+            mcap_cr = (
+                mcap / 1e7
+                if mcap is not None
+                else safe_float(
+                    fb.get("mcap_cr")
+                )
+            )
+
+            beta = safe_float(
+                p.get("beta"),
+                fb.get("beta")
+            )
+
+            roe = safe_float(
+                info.get("returnOnEquity"),
+                None
+            )
+
+            pb = safe_float(
+                info.get("priceToBook"),
+                None
+            )
+
+            debt_equity = safe_float(
+                info.get("debtToEquity"),
+                None
+            )
+
+            six_month_return = None
+
+            hist = fetch_history(
+                ticker
+            )
+
+            if (
+                hist is not None
+                and not hist.empty
+            ):
+                h = (
+                    slice_as_of(
+                        hist,
+                        selected_date
+                    )
+                    if selected_date is not None
+                    else hist
+                )
+
+                if (
+                    h is not None
+                    and len(h) > 126
+                ):
+                    start = safe_float(
+                        h["Close"].iloc[-127],
+                        None
+                    )
+                    end = safe_float(
+                        h["Close"].iloc[-1],
+                        None
+                    )
+
+                    if (
+                        start is not None
+                        and end is not None
+                        and start > 0
+                    ):
+                        six_month_return = (
+                            end / start - 1
+                        ) * 100
+
+            comparison_rows.append({
+                "Company":
+                    meta["name"],
+
+                "Ticker":
+                    ticker,
+
+                "Sector":
+                    meta["sector"],
+
+                "Price":
+                    cmp_,
+
+                "Market Cap (₹ Cr)":
+                    mcap_cr,
+
+                "P/E":
+                    pe,
+
+                "P/B":
+                    pb,
+
+                "EPS":
+                    eps,
+
+                "ROE %":
+                    roe * 100
+                    if roe is not None
+                    else None,
+
+                "Debt / Equity":
+                    debt_equity,
+
+                "Beta":
+                    beta,
+
+                "6M Return %":
+                    six_month_return,
+            })
+
+        comparison_df = pd.DataFrame(
+            comparison_rows
+        )
+
+        display_comparison = (
+            comparison_df.copy()
+        )
+
+        display_comparison[
+            "Price"
+        ] = display_comparison[
+            "Price"
+        ].map(
+            format_price
+        )
+
+        display_comparison[
+            "Market Cap (₹ Cr)"
+        ] = display_comparison[
+            "Market Cap (₹ Cr)"
+        ].map(
+            lambda x:
+            f"₹{x:,.0f} Cr"
+            if pd.notna(x)
+            else "N/A"
+        )
+
+        for col in [
+            "P/E",
+            "P/B",
+            "Beta",
+            "Debt / Equity"
+        ]:
+            display_comparison[
+                col
+            ] = display_comparison[
+                col
+            ].map(
+                lambda x:
+                f"{x:.2f}"
+                if pd.notna(x)
+                else "N/A"
+            )
+
+        display_comparison[
+            "EPS"
+        ] = display_comparison[
+            "EPS"
+        ].map(
+            lambda x:
+            f"₹{x:.2f}"
+            if pd.notna(x)
+            else "N/A"
+        )
+
+        display_comparison[
+            "ROE %"
+        ] = display_comparison[
+            "ROE %"
+        ].map(
+            lambda x:
+            f"{x:.2f}%"
+            if pd.notna(x)
+            else "N/A"
+        )
+
+        display_comparison[
+            "6M Return %"
+        ] = display_comparison[
+            "6M Return %"
+        ].map(
+            lambda x:
+            f"{x:+.2f}%"
+            if pd.notna(x)
+            else "N/A"
+        )
+
+        st.dataframe(
+            display_comparison,
+            width="stretch",
+            hide_index=True
+        )
+
+        # ------------------ VALUATION COMPARISON ------------------
+        st.subheader(
+            "P/E Comparison"
+        )
+
+        pe_chart_df = comparison_df[
+            [
+                "Company",
+                "P/E"
+            ]
+        ].dropna()
+
+        if not pe_chart_df.empty:
+
+            pe_fig = go.Figure()
+
+            pe_fig.add_trace(
+                go.Bar(
+                    x=pe_chart_df["Company"],
+                    y=pe_chart_df["P/E"],
+                    text=[
+                        f"{x:.1f}x"
+                        for x in pe_chart_df["P/E"]
+                    ],
+                    textposition="outside",
+                    marker_color="#1a73e8"
+                )
+            )
+
+            pe_fig.update_layout(
+                title="Trailing P/E Comparison",
+                xaxis_title="Company",
+                yaxis_title="P/E (x)",
+                template="plotly_white",
+                height=430
+            )
+
+            st.plotly_chart(
+                pe_fig,
+                width="stretch"
+            )
+
+        # ------------------ RISK / RETURN SCATTER ------------------
+        st.subheader(
+            "Risk vs Return Comparison"
+        )
+
+        scatter_df = comparison_df.dropna(
+            subset=[
+                "Beta",
+                "6M Return %"
+            ]
+        )
+
+        if not scatter_df.empty:
+
+            scatter_fig = go.Figure()
+
+            scatter_fig.add_trace(
+                go.Scatter(
+                    x=scatter_df["Beta"],
+                    y=scatter_df["6M Return %"],
+                    mode="markers+text",
+                    text=scatter_df["Company"],
+                    textposition="top center",
+                    marker=dict(
+                        size=12,
+                        color="#9334e6"
+                    ),
+                    name="Companies"
+                )
+            )
+
+            scatter_fig.update_layout(
+                title="Beta vs 6-Month Return",
+                xaxis_title="Beta",
+                yaxis_title="6-Month Return (%)",
+                template="plotly_white",
+                height=470
+            )
+
+            st.plotly_chart(
+                scatter_fig,
+                width="stretch"
+            )
+
+        # ------------------ RETURN BAR ------------------
+        st.subheader(
+            "6-Month Return Comparison"
+        )
+
+        return_df = comparison_df[
+            [
+                "Company",
+                "6M Return %"
+            ]
+        ].dropna()
+
+        if not return_df.empty:
+
+            return_fig = go.Figure()
+
+            return_fig.add_trace(
+                go.Bar(
+                    x=return_df["Company"],
+                    y=return_df["6M Return %"],
+                    text=[
+                        f"{x:+.1f}%"
+                        for x in return_df["6M Return %"]
+                    ],
+                    textposition="outside",
+                    marker_color="#188038"
+                )
+            )
+
+            return_fig.update_layout(
+                title="6-Month Stock Return Comparison",
+                xaxis_title="Company",
+                yaxis_title="Return (%)",
+                template="plotly_white",
+                height=430
+            )
+
+            st.plotly_chart(
+                return_fig,
+                width="stretch"
+            )
+
+except Exception as e:
+    st.error(
+        "Company comparison could not be loaded."
+    )
+    st.exception(e)
+
+
+# -----------------------------------------------------------------------------
+# 12. FOOTER
+# -----------------------------------------------------------------------------
+st.divider()
+
+st.caption(
+    "Indian Equity Portfolio Dashboard • "
+    "₹1 Crore starting capital • "
+    "Investment date: 1 August 2026 • "
+    "Target date: 1 August 2029 • "
+    "Yahoo Finance data where available • "
+    "Educational / analytical use only"
+)
