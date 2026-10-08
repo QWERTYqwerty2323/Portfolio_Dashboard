@@ -239,19 +239,33 @@ INVESTMENT_DATE = pd.Timestamp("2026-08-01")
 TARGET_DATE = pd.Timestamp("2029-08-01")
 
 
+def _normalize_timestamp(value):
+    """Return a timezone-naive, normalized pandas Timestamp.
+
+    Yahoo Finance can return timezone-aware timestamps while Streamlit/date
+    selectors usually provide timezone-naive dates. Normalizing both sides
+    through UTC prevents tz-aware vs tz-naive comparison errors.
+    """
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    return ts.normalize()
+
+
 def _date_index(hist):
-    """Return a timezone-naive normalized DatetimeIndex for safe date comparisons."""
-    idx = hist.index
-    if getattr(idx, "tz", None) is not None:
-        idx = idx.tz_localize(None)
-    return pd.DatetimeIndex(idx).normalize()
+    """Return a timezone-naive normalized DatetimeIndex for safe comparisons."""
+    # utc=True safely handles both timezone-aware and timezone-naive Yahoo
+    # timestamps, including indexes whose timezone metadata is inconsistent.
+    idx = pd.DatetimeIndex(pd.to_datetime(hist.index, utc=True))
+    idx = idx.tz_convert(None)
+    return idx.normalize()
 
 
 def slice_as_of(hist, as_of_date):
     if hist is None or hist.empty:
         return None
     idx = _date_index(hist)
-    target = pd.Timestamp(as_of_date).normalize()
+    target = _normalize_timestamp(as_of_date)
     mask = idx <= target
     if not mask.any():
         return None
@@ -264,7 +278,7 @@ def slice_from_date(hist, start_date):
     if hist is None or hist.empty:
         return None
     idx = _date_index(hist)
-    target = pd.Timestamp(start_date).normalize()
+    target = _normalize_timestamp(start_date)
     mask = idx >= target
     if not mask.any():
         return None
@@ -296,7 +310,7 @@ def format_report_date(d):
 
 def elapsed_years(as_of_date=None):
     # None means live mode: use today's calendar date for time-based assets.
-    target = pd.Timestamp.today().normalize() if as_of_date is None else pd.Timestamp(as_of_date).normalize()
+    target = _normalize_timestamp(pd.Timestamp.today()) if as_of_date is None else _normalize_timestamp(as_of_date)
     days = max((target - INVESTMENT_DATE).days, 0)
     return days / 365.25
 
@@ -343,7 +357,7 @@ def get_price_series(t, as_of_date=None):
         entry_row = find_entry_row(hist)
         buy_price = float(entry_row["Close"]) if entry_row is not None else None
         entry_idx = slice_from_date(hist, INVESTMENT_DATE)
-        if entry_idx is None or entry_idx.empty or pd.Timestamp(h_asof.index[-1]) < pd.Timestamp(entry_idx.index[0]):
+        if entry_idx is None or entry_idx.empty or h_asof.index[-1] < entry_idx.index[0]:
             buy_price = None
         beta = info.get("beta") or compute_beta_vs_nifty(hist, as_of_date) or fb.get("beta", 1.0)
         low52 = float(h_asof["Close"].tail(252).min())
@@ -372,7 +386,7 @@ def get_price_series(t, as_of_date=None):
 @st.cache_data(ttl=900, show_spinner=False)
 def compute_scenario(scenario_name, as_of_date):
     sc = SCENARIOS[scenario_name]
-    as_of = pd.Timestamp.today().normalize() if as_of_date is None else pd.Timestamp(as_of_date).normalize()
+    as_of = _normalize_timestamp(pd.Timestamp.today()) if as_of_date is None else _normalize_timestamp(as_of_date)
     years = elapsed_years(as_of)
     rows = []
 
@@ -643,13 +657,13 @@ selected_date = None if is_live_mode else selected_option
 with selector_col:
     if not is_live_mode:
         report_label_preview = format_report_date(selected_date)
-        if pd.Timestamp(selected_date) < INVESTMENT_DATE:
+        if _normalize_timestamp(selected_date) < INVESTMENT_DATE:
             st.error("The selected report date is before the 1 August 2026 investment date.")
             st.stop()
         st.info(
             f"📌 **Historical report as on {report_label_preview}** | "
             f"Investment date: **01 Aug 2026** | Target date: **01 Sep 2029** | "
-            f"Elapsed: **{max((pd.Timestamp(selected_date) - INVESTMENT_DATE).days, 0)} days**"
+            f"Elapsed: **{max((_normalize_timestamp(selected_date) - INVESTMENT_DATE).days, 0)} days**"
         )
 
 with status_col:
@@ -722,7 +736,7 @@ try:
     # Target is a 3-year terminal objective, not an achievement today.
     target_gap = kpis["target"] - kpis["current_value"]
     target_progress = (kpis["current_value"] / kpis["target"] * 100) if kpis["target"] else 0
-    if not is_live_mode and pd.Timestamp(selected_date) >= TARGET_DATE:
+    if not is_live_mode and _normalize_timestamp(selected_date) >= TARGET_DATE:
         if target_gap <= 0:
             st.success(f"3-Year Target {inr(kpis['target'])} — achieved / exceeded ✅")
         else:
