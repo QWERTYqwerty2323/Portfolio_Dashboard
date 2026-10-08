@@ -784,17 +784,49 @@ if len(comparison) >= 2:
             "Drawdown %": drawdown(t, LATEST_DATE),
         })
     comp = pd.DataFrame(comp_rows)
+
+    # Yahoo Finance can return missing/string/non-finite market-cap values.
+    # Coerce comparison metrics before passing them to Plotly.
+    numeric_cols = ["Market Cap", "P/E", "P/B", "EPS", "ROE %", "Debt/Equity",
+                    "Beta", "6M Return %", "Volatility %", "Sharpe", "Drawdown %"]
+    for c in numeric_cols:
+        if c in comp.columns:
+            comp[c] = pd.to_numeric(comp[c], errors="coerce")
+    comp = comp.replace([np.inf, -np.inf], np.nan)
     st.dataframe(comp.round(2), use_container_width=True, hide_index=True)
 
-    fc = px.bar(comp, x="Company", y="6M Return %", title="6M return comparison")
-    st.plotly_chart(fc, use_container_width=True)
+    bar_ret = comp.dropna(subset=["6M Return %"]).copy()
+    if not bar_ret.empty:
+        fc = px.bar(bar_ret, x="Company", y="6M Return %", title="6M return comparison")
+        st.plotly_chart(fc, use_container_width=True)
 
-    fv = px.bar(comp, x="Company", y="P/E", title="Valuation comparison — P/E")
-    st.plotly_chart(fv, use_container_width=True)
+    bar_pe = comp.dropna(subset=["P/E"]).copy()
+    if not bar_pe.empty:
+        fv = px.bar(bar_pe, x="Company", y="P/E", title="Valuation comparison — P/E")
+        st.plotly_chart(fv, use_container_width=True)
 
-    fs = px.scatter(comp, x="Volatility %", y="6M Return %", size="Market Cap", text="Company", title="Risk-return comparison")
-    fs.update_traces(textposition="top center")
-    st.plotly_chart(fs, use_container_width=True)
+    # Plotly requires bubble sizes to be finite and strictly positive.
+    scatter = comp.dropna(subset=["Volatility %", "6M Return %"]).copy()
+    if not scatter.empty:
+        scatter["Bubble Size"] = pd.to_numeric(scatter.get("Market Cap"), errors="coerce")
+        valid = scatter["Bubble Size"].replace([np.inf, -np.inf], np.nan).dropna()
+        positive = valid[valid > 0]
+        fallback = float(positive.median()) if not positive.empty else 20.0
+        scatter["Bubble Size"] = (
+            scatter["Bubble Size"].replace([np.inf, -np.inf], np.nan)
+            .where(scatter["Bubble Size"] > 0, fallback)
+            .fillna(fallback)
+            .clip(lower=1.0)
+        )
+        fs = px.scatter(
+            scatter, x="Volatility %", y="6M Return %",
+            size="Bubble Size", text="Company",
+            title="Risk-return comparison", size_max=45
+        )
+        fs.update_traces(textposition="top center")
+        st.plotly_chart(fs, use_container_width=True)
+    else:
+        st.info("Not enough valid return/volatility data to draw the risk-return comparison.")
 else:
     st.info("Select at least two companies to compare.")
 
