@@ -32,6 +32,89 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+# ------------------------- responsive UI -------------------------
+st.markdown("""
+<style>
+.block-container {
+    width: 100%;
+    max-width: 1600px;
+    padding-left: clamp(0.75rem, 2vw, 3rem);
+    padding-right: clamp(0.75rem, 2vw, 3rem);
+    padding-top: clamp(0.75rem, 2vw, 2rem);
+}
+h1, h2, h3, h4, p, label, [data-testid="stMetricLabel"],
+[data-testid="stMetricValue"], [data-testid="stCaptionContainer"] {
+    overflow-wrap: anywhere;
+}
+[data-testid="stDataFrame"], [data-testid="stTable"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+}
+[data-testid="stPlotlyChart"], [data-testid="stVegaLiteChart"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+button, input, textarea, select { min-height: 42px; }
+[data-baseweb="tab-list"] {
+    overflow-x: auto !important;
+    white-space: nowrap;
+}
+[data-baseweb="tab"] { flex: 0 0 auto !important; }
+
+@media (max-width: 768px) {
+    .block-container {
+        padding-left: 0.65rem !important;
+        padding-right: 0.65rem !important;
+        padding-top: 0.6rem !important;
+    }
+    h1 { font-size: 1.65rem !important; line-height: 1.15 !important; }
+    h2 { font-size: 1.35rem !important; line-height: 1.2 !important; }
+    h3 { font-size: 1.15rem !important; line-height: 1.25 !important; }
+
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        gap: 0.55rem !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        flex: 1 1 100% !important;
+        width: 100% !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
+    }
+    [data-testid="stMetric"] { padding: 0.65rem 0.75rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
+    [data-testid="stDataFrame"] > div {
+        max-width: 100% !important;
+        overflow-x: auto !important;
+    }
+    [data-testid="stSidebar"] button,
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] [role="combobox"] {
+        min-height: 44px !important;
+    }
+}
+@media (max-width: 420px) {
+    .block-container {
+        padding-left: 0.45rem !important;
+        padding-right: 0.45rem !important;
+    }
+    h1 { font-size: 1.45rem !important; }
+    h2 { font-size: 1.2rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.2rem !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.78rem !important; }
+}
+@media (min-width: 769px) and (max-width: 1024px) {
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        min-width: 48% !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ------------------------- constants -------------------------
 START_DATE = pd.Timestamp("2026-08-01")
 BENCHMARK = "^NSEI"
@@ -583,7 +666,7 @@ if not weights1.empty:
     long1 = weights1.melt(id_vars="Date", var_name="Ticker", value_name="Weight %")
     long1["Instrument"] = long1["Ticker"].map({t: EQUITY_META[t][0] for t in EQUITY_META} | {t: DEBT_META[t]["name"] for t in DEBT_META} | {GOLD: "Gold ETF"})
     figw = px.line(long1, x="Date", y="Weight %", color="Instrument", markers=True, title="Weekly portfolio weights — Phase 1")
-    st.plotly_chart(figw, use_container_width=True)
+    st.plotly_chart(figw, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
 if not phase1.empty:
     r1 = (phase1.iloc[-1] / phase1.iloc[0] - 1) * 100
@@ -631,7 +714,7 @@ if not weights2.empty:
     long2 = weights2.melt(id_vars="Date", var_name="Ticker", value_name="Weight %")
     long2["Instrument"] = long2["Ticker"].map({t: EQUITY_META[t][0] for t in EQUITY_META} | {t: DEBT_META[t]["name"] for t in DEBT_META} | {GOLD: "Gold ETF"})
     figw2 = px.line(long2, x="Date", y="Weight %", color="Instrument", markers=True, title="Weekly portfolio weights — Phase 2")
-    st.plotly_chart(figw2, use_container_width=True)
+    st.plotly_chart(figw2, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
 if not phase2.empty:
     r2 = (phase2.iloc[-1] / phase2.iloc[0] - 1) * 100
@@ -658,7 +741,7 @@ if not overall.empty:
         fig.add_trace(go.Scatter(x=norm_bench.index, y=norm_bench.values, name="NIFTY 50", mode="lines"))
     fig.add_vline(x=RESELECT_DATE.timestamp() * 1000, line_dash="dash", annotation_text="6-week reselection")
     fig.update_layout(title="Indexed growth — ₹100 starting value", xaxis_title="Date", yaxis_title="Indexed Value")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
     overall_ret = (overall.iloc[-1] / overall.iloc[0] - 1) * 100
     bench_ret = (bench_all.iloc[-1] / bench_all.iloc[0] - 1) * 100 if not bench_all.empty else np.nan
@@ -677,7 +760,7 @@ if not overall.empty:
     if not bdd.empty:
         fd.add_trace(go.Scatter(x=bdd.index, y=bdd * 100, name="NIFTY Drawdown", mode="lines"))
     fd.update_layout(title="Portfolio vs NIFTY drawdown", yaxis_title="Drawdown %")
-    st.plotly_chart(fd, use_container_width=True)
+    st.plotly_chart(fd, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
 # ------------------------- 8 portfolio snapshot -------------------------
 st.header("8. 💼 Current Portfolio Snapshot")
@@ -698,7 +781,7 @@ st.dataframe(current_df.round(2), use_container_width=True, hide_index=True)
 # Sector allocation
 sector_df = current_df.groupby("Sector", as_index=False)["Weight %"].sum().sort_values("Weight %", ascending=False)
 fig_sector = px.bar(sector_df, x="Sector", y="Weight %", title="Current sector / asset allocation")
-st.plotly_chart(fig_sector, use_container_width=True)
+st.plotly_chart(fig_sector, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
 # ------------------------- 9 company analysis -------------------------
 st.header("9. 🔎 Company Analysis")
@@ -726,7 +809,7 @@ st.write(f"**{name}** · {analysis_ticker} · {sector}")
 
 ret_df = pd.DataFrame({"Period": ["1M", "3M", "6M", "1Y"], "Return %": [ret1m, ret3m, ret6m, ret1y]})
 fig_ret = px.bar(ret_df, x="Period", y="Return %", title=f"{name} — historical returns")
-st.plotly_chart(fig_ret, use_container_width=True)
+st.plotly_chart(fig_ret, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
 hist = HIST.get(analysis_ticker)
 if hist is not None and not hist.empty:
@@ -739,7 +822,7 @@ if hist is not None and not hist.empty:
         fp.add_trace(go.Scatter(x=h.index, y=h["DMA50"], name="50 DMA"))
         fp.add_trace(go.Scatter(x=h.index, y=h["DMA200"], name="200 DMA"))
         fp.update_layout(title=f"{name} — Price & Moving Averages", yaxis_title="₹")
-        st.plotly_chart(fp, use_container_width=True)
+        st.plotly_chart(fp, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
 fund = pd.DataFrame([
     ["EPS", m["EPS"]], ["P/E", m["P/E"]], ["Peer P/E", peerpe],
@@ -798,12 +881,12 @@ if len(comparison) >= 2:
     bar_ret = comp.dropna(subset=["6M Return %"]).copy()
     if not bar_ret.empty:
         fc = px.bar(bar_ret, x="Company", y="6M Return %", title="6M return comparison")
-        st.plotly_chart(fc, use_container_width=True)
+        st.plotly_chart(fc, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
     bar_pe = comp.dropna(subset=["P/E"]).copy()
     if not bar_pe.empty:
         fv = px.bar(bar_pe, x="Company", y="P/E", title="Valuation comparison — P/E")
-        st.plotly_chart(fv, use_container_width=True)
+        st.plotly_chart(fv, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
     # Plotly requires bubble sizes to be finite and strictly positive.
     scatter = comp.dropna(subset=["Volatility %", "6M Return %"]).copy()
@@ -824,7 +907,7 @@ if len(comparison) >= 2:
             title="Risk-return comparison", size_max=45
         )
         fs.update_traces(textposition="top center")
-        st.plotly_chart(fs, use_container_width=True)
+        st.plotly_chart(fs, use_container_width=True, config={"responsive": True, "displaylogo": False})
     else:
         st.info("Not enough valid return/volatility data to draw the risk-return comparison.")
 else:
