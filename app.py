@@ -762,6 +762,203 @@ if not overall.empty:
     fd.update_layout(title="Portfolio vs NIFTY drawdown", yaxis_title="Drawdown %")
     st.plotly_chart(fd, use_container_width=True, config={"responsive": True, "displaylogo": False})
 
+# ------------------------- weekly report download -------------------------
+st.header("📥 Weekly Report Export")
+st.write(
+    "Choose a weekly rebalance date to export a self-contained report for that week. "
+    "The Markdown file is suitable for uploading to an AI tool to generate a narrative dashboard report; "
+    "the JSON file contains structured data for analysis."
+)
+
+_report_dates = []
+for _wdf in (weights1, weights2):
+    if _wdf is not None and not _wdf.empty and "Date" in _wdf.columns:
+        _report_dates.extend([norm_date(d) for d in pd.to_datetime(_wdf["Date"], errors="coerce").dropna()])
+_report_dates = sorted(set(_report_dates))
+
+if _report_dates:
+    _report_date = st.selectbox(
+        "Select weekly report date",
+        options=_report_dates,
+        index=len(_report_dates) - 1,
+        format_func=lambda d: d.strftime("%A, %d %b %Y"),
+        key="weekly_report_date",
+    )
+    _phase_name = "Phase 1 — initial six-week portfolio" if _report_date <= norm_date(RESELECT_DATE) else "Phase 2 — post-reselection portfolio"
+    _weight_source = weights1 if _report_date <= norm_date(RESELECT_DATE) else weights2
+    _weight_row = None
+    if _weight_source is not None and not _weight_source.empty:
+        _wtemp = _weight_source.copy()
+        _wtemp["Date"] = pd.to_datetime(_wtemp["Date"], errors="coerce").map(lambda d: norm_date(d) if pd.notna(d) else pd.NaT)
+        _eligible = _wtemp[_wtemp["Date"] <= _report_date]
+        if not _eligible.empty:
+            _weight_row = _eligible.iloc[-1]
+
+    _portfolio_at_date = overall.loc[overall.index <= _report_date] if not overall.empty else pd.Series(dtype=float)
+    _portfolio_value = safe_float(_portfolio_at_date.iloc[-1]) if not _portfolio_at_date.empty else np.nan
+    _prior_report_dates = [d for d in _report_dates if d < _report_date]
+    _prior_report_date = _prior_report_dates[-1] if _prior_report_dates else None
+    _previous_week_values = overall.loc[overall.index <= _prior_report_date] if not overall.empty and _prior_report_date is not None else pd.Series(dtype=float)
+    _prior_value = safe_float(_previous_week_values.iloc[-1]) if not _previous_week_values.empty else np.nan
+    _weekly_return = (_portfolio_value / _prior_value - 1) * 100 if pd.notna(_portfolio_value) and pd.notna(_prior_value) and _prior_value else np.nan
+    _benchmark_to_date = asof(BENCHMARK, _report_date)
+    _benchmark_value = safe_float(_benchmark_to_date["Close"].iloc[-1]) if _benchmark_to_date is not None and not _benchmark_to_date.empty else np.nan
+    _benchmark_before = asof(BENCHMARK, _report_date - pd.Timedelta(days=7))
+    _benchmark_prev = safe_float(_benchmark_before["Close"].iloc[-1]) if _benchmark_before is not None and not _benchmark_before.empty else np.nan
+    _benchmark_week_return = (_benchmark_value / _benchmark_prev - 1) * 100 if pd.notna(_benchmark_value) and pd.notna(_benchmark_prev) and _benchmark_prev else np.nan
+
+    _holding_rows = []
+    _report_weights = {}
+    _previous_weight_row = None
+    if _weight_source is not None and not _weight_source.empty and _prior_report_date is not None:
+        _prior_rows = _weight_source.copy()
+        _prior_rows["Date"] = pd.to_datetime(_prior_rows["Date"], errors="coerce").map(lambda d: norm_date(d) if pd.notna(d) else pd.NaT)
+        _prior_eligible = _prior_rows[_prior_rows["Date"] <= _prior_report_date]
+        if not _prior_eligible.empty:
+            _previous_weight_row = _prior_eligible.iloc[-1]
+    if _weight_row is not None:
+        for _ticker in list(EQUITY_META) + list(DEBT_META) + [GOLD]:
+            _weight = safe_float(_weight_row.get(_ticker))
+            if pd.isna(_weight) or _weight <= 0:
+                continue
+            _report_weights[_ticker] = round(float(_weight), 4)
+            if _ticker in EQUITY_META:
+                _nm, _sector = EQUITY_META[_ticker]
+                _price = close_asof(_ticker, _report_date)
+                _holding_rows.append({
+                    "Instrument": _nm, "Ticker": _ticker, "Type": "Equity", "Sector": _sector,
+                    "Weight %": _weight,
+                    "Weight Change (pp)": (_weight - safe_float(_previous_weight_row.get(_ticker), 0.0)) if _previous_weight_row is not None else np.nan,
+                    "Price ₹": _price,
+                    "1W Return %": return_pct(_ticker, _report_date, 7),
+                    "6W Return %": return_pct(_ticker, _report_date, 42),
+                    "Volatility %": volatility(_ticker, _report_date, 42),
+                    "Beta": beta(_ticker, _report_date),
+                    "P/E": info_metrics(_ticker, _report_date)["P/E"],
+                })
+            elif _ticker in DEBT_META:
+                _dm = DEBT_META[_ticker]
+                _holding_rows.append({
+                    "Instrument": _dm["name"], "Ticker": _ticker, "Type": "Debt", "Sector": _dm["sector"],
+                    "Weight %": _weight,
+                    "Weight Change (pp)": (_weight - safe_float(_previous_weight_row.get(_ticker), 0.0)) if _previous_weight_row is not None else np.nan,
+                    "Price ₹": np.nan, "Model Yield %": _dm["yield"] * 100,
+                    "Model Risk": _dm["risk"],
+                })
+            else:
+                _holding_rows.append({
+                    "Instrument": "Nippon India ETF Gold BeES", "Ticker": GOLD, "Type": "Gold",
+                    "Sector": "Commodity", "Weight %": _weight,
+                    "Weight Change (pp)": (_weight - safe_float(_previous_weight_row.get(_ticker), 0.0)) if _previous_weight_row is not None else np.nan,
+                    "Price ₹": close_asof(GOLD, _report_date),
+                    "1W Return %": return_pct(GOLD, _report_date, 7),
+                    "6W Return %": return_pct(GOLD, _report_date, 42),
+                })
+    _holdings_df = pd.DataFrame(_holding_rows)
+
+    _phase1_end_value = safe_float(phase1.loc[phase1.index <= _report_date].iloc[-1]) if not phase1.loc[phase1.index <= _report_date].empty else np.nan
+    _overall_return_to_date = (_portfolio_value / overall.iloc[0] - 1) * 100 if pd.notna(_portfolio_value) and not overall.empty and overall.iloc[0] else np.nan
+    _benchmark_start_hist = asof(BENCHMARK, FIRST_DATE)
+    _benchmark_start_value = safe_float(_benchmark_start_hist["Close"].iloc[-1]) if _benchmark_start_hist is not None and not _benchmark_start_hist.empty else np.nan
+    _benchmark_total_to_date = (_benchmark_value / _benchmark_start_value - 1) * 100 if pd.notna(_benchmark_value) and pd.notna(_benchmark_start_value) and _benchmark_start_value else np.nan
+
+    st.caption(f"Report date: {_report_date:%d %b %Y} · {_phase_name} · Persona: {persona}")
+    _m1, _m2, _m3, _m4 = st.columns(4)
+    _m1.metric("Portfolio value", fmt_inr(_portfolio_value))
+    _m2.metric("Weekly portfolio return", fmt_pct(_weekly_return))
+    _m3.metric("Weekly NIFTY return", fmt_pct(_benchmark_week_return))
+    _m4.metric("Return since start", fmt_pct(_overall_return_to_date))
+    st.subheader("Holdings and weights for selected week")
+    if not _holdings_df.empty:
+        st.dataframe(_holdings_df.round(3), use_container_width=True, hide_index=True)
+    else:
+        st.info("No weekly weights are available for this date yet.")
+
+    _week6_event = "YES — this is the week-6 reselection date." if _report_date == norm_date(RESELECT_DATE) else ("After the week-6 reselection." if _report_date > norm_date(RESELECT_DATE) else "Before the week-6 reselection.")
+    _report_payload = {
+        "report_title": "ALPHA Weekly Portfolio Research Report",
+        "report_date": _report_date.strftime("%Y-%m-%d"),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "strategy_phase": _phase_name,
+        "persona": persona,
+        "persona_description": PERSONAS[persona]["description"],
+        "starting_capital_inr": float(capital),
+        "portfolio_value_inr": float(_portfolio_value) if pd.notna(_portfolio_value) else None,
+        "weekly_portfolio_return_pct": float(_weekly_return) if pd.notna(_weekly_return) else None,
+        "weekly_nifty_return_pct": float(_benchmark_week_return) if pd.notna(_benchmark_week_return) else None,
+        "overall_return_since_start_pct": float(_overall_return_to_date) if pd.notna(_overall_return_to_date) else None,
+        "nifty_return_since_start_pct": float(_benchmark_total_to_date) if pd.notna(_benchmark_total_to_date) else None,
+        "week6_reselection_date": norm_date(RESELECT_DATE).strftime("%Y-%m-%d"),
+        "week6_reselection_status": _week6_event,
+        "research_universe": {
+            "equities": [{"ticker": t, "company": n, "sector": s} for t, (n, s) in EQUITY_META.items()],
+            "debt": [{"ticker": t, "instrument": m["name"], "assumed_yield_pct": m["yield"] * 100, "model_risk": m["risk"]} for t, m in DEBT_META.items()],
+            "gold_etf": GOLD,
+        },
+        "holdings": _holdings_df.replace({np.nan: None}).to_dict(orient="records") if not _holdings_df.empty else [],
+        "weights_pct": _report_weights,
+        "methodology_notes": [
+            "Research universe: 15 equities + 3 debt instruments + Gold ETF.",
+            "Actual portfolio: 12 equities + 2 debt instruments + Gold ETF.",
+            "Equity selection score combines momentum, peer-relative valuation, inverse volatility, inverse beta and drawdown.",
+            "Weights are recalculated weekly; after week 6, the equity and debt selections are re-ranked.",
+            "Debt performance is modelled using assumed annual yields and daily accrual.",
+            "Historical returns are based on Yahoo Finance data; missing metrics may be unavailable.",
+            "This is a research simulation, not personalised investment advice; returns are not guaranteed.",
+        ],
+    }
+    _report_lines = [
+        "# ALPHA Weekly Portfolio Research Report", "",
+        f"- **Selected week/date:** {_report_date:%A, %d %B %Y}",
+        f"- **Strategy phase:** {_phase_name}", f"- **Investor persona:** {persona} — {PERSONAS[persona]['description']}",
+        f"- **Starting capital:** {fmt_inr(capital)}", f"- **Portfolio value at report date:** {fmt_inr(_portfolio_value)}",
+        f"- **Weekly portfolio return:** {fmt_pct(_weekly_return)}", f"- **Weekly NIFTY 50 return:** {fmt_pct(_benchmark_week_return)}",
+        f"- **Portfolio return since strategy start:** {fmt_pct(_overall_return_to_date)}",
+        f"- **NIFTY return since strategy start:** {fmt_pct(_benchmark_total_to_date)}",
+        f"- **Week-6 review date:** {norm_date(RESELECT_DATE):%d %b %Y}", f"- **Reselection status:** {_week6_event}", "",
+        "## Strategy and portfolio construction", "- Research universe: 15 equities, 3 debt instruments and Gold ETF.",
+        "- Actual holdings: 12 equities, 2 debt instruments and Gold ETF.",
+        "- Weights are redistributed weekly. At the week-6 review, the universe is re-ranked and Phase 2 uses the newly selected holdings.",
+        "- Equity scoring considers momentum, peer-relative valuation, inverse volatility, inverse beta and drawdown.",
+        "- Debt returns are simulated using the stated annual yield assumptions; this is not a live bond-price valuation.", "",
+        "## Holdings and weekly metrics", "| Instrument | Ticker | Type | Sector | Weight % | Price ₹ | 1W Return % | 6W Return % | Volatility % | Beta | P/E | Model Yield % | Model Risk |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    ]
+    if not _holdings_df.empty:
+        for _, _r in _holdings_df.iterrows():
+            _cells = []
+            for _col in ["Instrument", "Ticker", "Type", "Sector", "Weight %", "Weight Change (pp)", "Price ₹", "1W Return %", "6W Return %", "Volatility %", "Beta", "P/E", "Model Yield %", "Model Risk"]:
+                _v = _r.get(_col, np.nan)
+                _cells.append(str(_v) if pd.notna(_v) else "N/A")
+            _report_lines.append("| " + " | ".join(_cells) + " |")
+    _report_lines += ["", "## Research universe", "### Equities"]
+    _report_lines += [f"- {n} (`{t}`) — {s}" for t, (n, s) in EQUITY_META.items()]
+    _report_lines += ["", "### Debt instruments"]
+    _report_lines += [f"- {m['name']} (`{t}`) — assumed yield {m['yield']*100:.2f}%; model risk {m['risk']:.2f}" for t, m in DEBT_META.items()]
+    _report_lines += ["", "## Notes and limitations"] + [f"- {note}" for note in _report_payload["methodology_notes"]]
+    _report_lines += ["", "## Suggested AI task", "Use only the data in this report to create a concise, professional weekly portfolio dashboard narrative. Highlight performance versus NIFTY, weekly weight allocation, important holdings/risks, valuation and missing data. Clearly label model assumptions and do not invent facts or present the simulation as a guaranteed forecast."]
+    _markdown_report = "\n".join(_report_lines)
+
+    _file_stem = f"alpha_weekly_report_{_report_date:%Y%m%d}"
+    _dl1, _dl2, _dl3 = st.columns(3)
+    _dl1.download_button(
+        "⬇️ Download AI-ready report (.md)", data=_markdown_report.encode("utf-8"),
+        file_name=f"{_file_stem}.md", mime="text/markdown", use_container_width=True,
+    )
+    import json as _json
+    _dl2.download_button(
+        "⬇️ Download structured data (.json)",
+        data=_json.dumps(_report_payload, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
+        file_name=f"{_file_stem}.json", mime="application/json", use_container_width=True,
+    )
+    if not _holdings_df.empty:
+        _dl3.download_button(
+            "⬇️ Download holdings (.csv)", data=_holdings_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{_file_stem}_holdings.csv", mime="text/csv", use_container_width=True,
+        )
+else:
+    st.info("Weekly report downloads will appear once weekly portfolio weights are available.")
+
 # ------------------------- 8 portfolio snapshot -------------------------
 st.header("8. 💼 Current Portfolio Snapshot")
 current_weights = weekly_weights(selected_eq, selected_debt, LATEST_DATE, persona)
