@@ -33,84 +33,38 @@ st.set_page_config(
 )
 
 
-# ------------------------- responsive UI -------------------------
+# ------------------------- RESPONSIVE LAYOUT -------------------------
 st.markdown("""
 <style>
 .block-container {
     width: 100%;
     max-width: 1600px;
-    padding-left: clamp(0.75rem, 2vw, 3rem);
-    padding-right: clamp(0.75rem, 2vw, 3rem);
-    padding-top: clamp(0.75rem, 2vw, 2rem);
+    padding-left: clamp(.65rem, 2vw, 2.5rem);
+    padding-right: clamp(.65rem, 2vw, 2.5rem);
 }
-h1, h2, h3, h4, p, label, [data-testid="stMetricLabel"],
-[data-testid="stMetricValue"], [data-testid="stCaptionContainer"] {
-    overflow-wrap: anywhere;
-}
+h1, h2, h3, p, label, [data-testid="stMetricValue"],
+[data-testid="stMetricLabel"] { overflow-wrap: anywhere; }
 [data-testid="stDataFrame"], [data-testid="stTable"] {
-    width: 100% !important;
     max-width: 100% !important;
     overflow-x: auto !important;
 }
-[data-testid="stPlotlyChart"], [data-testid="stVegaLiteChart"] {
+[data-testid="stPlotlyChart"] {
     width: 100% !important;
     max-width: 100% !important;
-    overflow: hidden !important;
 }
-button, input, textarea, select { min-height: 42px; }
-[data-baseweb="tab-list"] {
-    overflow-x: auto !important;
-    white-space: nowrap;
-}
+[data-baseweb="tab-list"] { overflow-x: auto !important; white-space: nowrap; }
 [data-baseweb="tab"] { flex: 0 0 auto !important; }
-
+button, input, textarea, select { min-height: 42px; }
 @media (max-width: 768px) {
-    .block-container {
-        padding-left: 0.65rem !important;
-        padding-right: 0.65rem !important;
-        padding-top: 0.6rem !important;
-    }
-    h1 { font-size: 1.65rem !important; line-height: 1.15 !important; }
-    h2 { font-size: 1.35rem !important; line-height: 1.2 !important; }
-    h3 { font-size: 1.15rem !important; line-height: 1.25 !important; }
-
-    [data-testid="stHorizontalBlock"] {
-        flex-wrap: wrap !important;
-        gap: 0.55rem !important;
-    }
+    .block-container { padding-left: .6rem !important; padding-right: .6rem !important; }
+    h1 { font-size: 1.55rem !important; }
+    h2 { font-size: 1.3rem !important; }
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: .55rem !important; }
     [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-        flex: 1 1 100% !important;
-        width: 100% !important;
-        min-width: 100% !important;
-        max-width: 100% !important;
+        flex: 1 1 100% !important; width: 100% !important;
+        min-width: 100% !important; max-width: 100% !important;
     }
-    [data-testid="stMetric"] { padding: 0.65rem 0.75rem !important; }
-    [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
-    [data-testid="stDataFrame"] > div {
-        max-width: 100% !important;
-        overflow-x: auto !important;
-    }
-    [data-testid="stSidebar"] button,
-    [data-testid="stSidebar"] input,
-    [data-testid="stSidebar"] [role="combobox"] {
-        min-height: 44px !important;
-    }
-}
-@media (max-width: 420px) {
-    .block-container {
-        padding-left: 0.45rem !important;
-        padding-right: 0.45rem !important;
-    }
-    h1 { font-size: 1.45rem !important; }
-    h2 { font-size: 1.2rem !important; }
-    [data-testid="stMetricValue"] { font-size: 1.2rem !important; }
-    [data-testid="stMetricLabel"] { font-size: 0.78rem !important; }
-}
-@media (min-width: 769px) and (max-width: 1024px) {
-    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
-    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-        min-width: 48% !important;
-    }
+    [data-testid="stMetricValue"] { font-size: 1.25rem !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -598,6 +552,196 @@ st.sidebar.write(f"Latest data: {LATEST_DATE:%d %b %Y}")
 st.title("📈 ALPHA — Dynamic 6-Week Reselection Portfolio")
 st.caption("15-company research universe + 3 debt instruments + Gold ETF | Actual holdings always = 12 equities + 2 debt + Gold")
 
+
+# ------------------------- REPORT DOWNLOAD MENU -------------------------
+# Exactly three CSV download buttons inside one top-right dropdown.
+_report_left, _report_right = st.columns([5, 1])
+with _report_right:
+    with st.popover("📥 Download reports", use_container_width=True):
+        st.caption("CSV format only")
+        _available_report_dates = available_dates()
+        if len(_available_report_dates) > 0:
+            _report_week_starts = week_start_dates(FIRST_DATE, LATEST_DATE)
+            _report_week_starts = [
+                pd.Timestamp(d) for d in _report_week_starts
+                if pd.Timestamp(d) <= norm_date(LATEST_DATE)
+            ]
+            if not _report_week_starts:
+                _report_week_starts = [norm_date(FIRST_DATE)]
+            _report_week_map = {d.strftime("%d %b %Y"): d for d in _report_week_starts}
+            _report_week_label = st.selectbox(
+                "Select week for the selected-week CSV",
+                list(_report_week_map.keys()),
+                index=max(0, len(_report_week_map) - 1),
+                key="alpha_csv_report_week",
+            )
+            _report_week_start = _report_week_map[_report_week_label]
+            _report_week_trading_days = _available_report_dates[
+                (_available_report_dates >= _report_week_start)
+                & (_available_report_dates.to_period("W-FRI") == _report_week_start.to_period("W-FRI"))
+                & (_available_report_dates <= norm_date(LATEST_DATE))
+            ]
+            _report_week_end = (
+                _report_week_trading_days[-1] if len(_report_week_trading_days)
+                else min(_report_week_start + pd.Timedelta(days=4), norm_date(LATEST_DATE))
+            )
+
+            def _report_return_for_period(series, start_date, end_date):
+                if series is None or len(series) < 2:
+                    return np.nan
+                period_series = series[
+                    (series.index >= norm_date(start_date))
+                    & (series.index <= norm_date(end_date))
+                ]
+                if len(period_series) < 2 or safe_float(period_series.iloc[0]) == 0:
+                    return np.nan
+                return (safe_float(period_series.iloc[-1]) / safe_float(period_series.iloc[0]) - 1) * 100
+
+            def _report_portfolio_series(start_date, end_date):
+                start_date, end_date = norm_date(start_date), norm_date(end_date)
+                p1 = phase1[(phase1.index >= start_date) & (phase1.index <= end_date)] if not phase1.empty else pd.Series(dtype=float)
+                p2 = phase2[(phase2.index >= start_date) & (phase2.index <= end_date)] if not phase2.empty else pd.Series(dtype=float)
+                if not p1.empty and not p2.empty:
+                    p2_scaled = p2 / p2.iloc[0] * phase1.iloc[-1]
+                    return pd.concat([p1, p2_scaled[p2_scaled.index > p1.index[-1]]])
+                if not p1.empty:
+                    return p1
+                if not p2.empty:
+                    anchor_value = phase1.iloc[-1] if not phase1.empty else CAPITAL
+                    return p2 / p2.iloc[0] * anchor_value
+                return pd.Series(dtype=float)
+
+            def _build_report_csv(start_date, end_date, report_title):
+                start_date, end_date = norm_date(start_date), norm_date(end_date)
+                portfolio = _report_portfolio_series(start_date, end_date)
+                nifty = benchmark_series(start_date, end_date)
+                portfolio_return = _report_return_for_period(portfolio, start_date, end_date)
+                nifty_return = _report_return_for_period(nifty, start_date, end_date)
+                outperformance = (
+                    portfolio_return - nifty_return
+                    if pd.notna(portfolio_return) and pd.notna(nifty_return) else np.nan
+                )
+                if end_date <= norm_date(RESELECT_DATE):
+                    equity_tickers, debt_tickers = initial_selected_eq, initial_selected_debt
+                    phase_label = "Initial six-week phase"
+                else:
+                    equity_tickers, debt_tickers = selected_eq, selected_debt
+                    phase_label = "After week-six reselection"
+
+                latest_weights = {}
+                for weights_frame in (weights1, weights2):
+                    if weights_frame is not None and not weights_frame.empty:
+                        wf = weights_frame.copy()
+                        wf["Date"] = pd.to_datetime(wf["Date"]).dt.tz_localize(None).dt.normalize()
+                        eligible = wf[wf["Date"] <= end_date].sort_values("Date")
+                        if not eligible.empty:
+                            latest_weights.update(eligible.iloc[-1].drop(labels=["Date"]).to_dict())
+
+                shared = {
+                    "Report": report_title,
+                    "Period Start": start_date.strftime("%Y-%m-%d"),
+                    "Period End": end_date.strftime("%Y-%m-%d"),
+                    "Investor Persona": persona,
+                    "Phase": phase_label,
+                    "ALPHA Return %": portfolio_return,
+                    "NIFTY 50 Return % (same period)": nifty_return,
+                    "Outperformance vs NIFTY (percentage points)": outperformance,
+                    "Capital Assumption INR": capital,
+                    "Week-6 Reselection Date": norm_date(RESELECT_DATE).strftime("%Y-%m-%d"),
+                }
+                rows = []
+                for ticker in equity_tickers:
+                    metrics = info_metrics(ticker, end_date)
+                    rows.append({
+                        **shared, "Record Type": "Holding", "Type": "Equity",
+                        "Instrument": EQUITY_META[ticker][0], "Ticker": ticker,
+                        "Sector": EQUITY_META[ticker][1],
+                        "Weight %": safe_float(latest_weights.get(ticker)),
+                        "Price": close_asof(ticker, end_date),
+                        "1W Return %": return_pct(ticker, end_date, 7),
+                        "1M Return %": return_pct(ticker, end_date, 30),
+                        "6M Return %": return_pct(ticker, end_date, 180),
+                        "Volatility %": volatility(ticker, end_date),
+                        "Beta": beta(ticker, end_date),
+                        "P/E": metrics["P/E"], "P/B": metrics["P/B"],
+                        "ROE %": metrics["ROE %"], "Sharpe": sharpe(ticker, end_date),
+                        "Drawdown %": drawdown(ticker, end_date),
+                    })
+                for ticker in debt_tickers:
+                    dm = DEBT_META[ticker]
+                    rows.append({
+                        **shared, "Record Type": "Holding", "Type": "Debt",
+                        "Instrument": dm["name"], "Ticker": ticker,
+                        "Sector": dm["sector"],
+                        "Weight %": safe_float(latest_weights.get(ticker)),
+                        "Model Annual Yield %": dm["yield"] * 100,
+                        "Model Risk": dm["risk"],
+                    })
+                rows.append({
+                    **shared, "Record Type": "Holding", "Type": "Gold ETF",
+                    "Instrument": "Nippon India ETF Gold BeES", "Ticker": GOLD,
+                    "Sector": "Commodity",
+                    "Weight %": safe_float(latest_weights.get(GOLD)),
+                    "Price": close_asof(GOLD, end_date),
+                    "1W Return %": return_pct(GOLD, end_date, 7),
+                    "1M Return %": return_pct(GOLD, end_date, 30),
+                    "6M Return %": return_pct(GOLD, end_date, 180),
+                    "Volatility %": volatility(GOLD, end_date),
+                })
+                rows.append({
+                    **shared, "Record Type": "Summary",
+                    "Instrument": "Portfolio vs NIFTY 50",
+                    "Portfolio Start Value": safe_float(portfolio.iloc[0]) if not portfolio.empty else np.nan,
+                    "Portfolio End Value": safe_float(portfolio.iloc[-1]) if not portfolio.empty else np.nan,
+                    "Research Equities": len(EQUITY_META),
+                    "Research Debt Instruments": len(DEBT_META),
+                    "Actual Equity Holdings": 12,
+                    "Actual Debt Holdings": 2,
+                    "Gold ETF Holdings": 1,
+                    "Methodology": "Equity/gold historical prices where available; debt modelled using assumed yield; taxes, brokerage, slippage and dividends are not separately modelled.",
+                })
+                if not portfolio.empty:
+                    aligned_nifty = nifty.reindex(portfolio.index).ffill() if not nifty.empty else pd.Series(index=portfolio.index, dtype=float)
+                    for dt in portfolio.index:
+                        rows.append({
+                            **shared, "Record Type": "Daily performance",
+                            "Performance Date": dt.strftime("%Y-%m-%d"),
+                            "Instrument": "ALPHA Portfolio vs NIFTY 50",
+                            "Portfolio Value": safe_float(portfolio.loc[dt]),
+                            "NIFTY 50 Value (same starting capital)": safe_float(aligned_nifty.loc[dt]) if dt in aligned_nifty.index else np.nan,
+                            "ALPHA Daily Return %": safe_float(portfolio.pct_change().loc[dt] * 100),
+                            "NIFTY Daily Return %": safe_float(aligned_nifty.pct_change().loc[dt] * 100) if dt in aligned_nifty.index else np.nan,
+                        })
+                return pd.DataFrame(rows)
+
+            _first_six_end = min(norm_date(RESELECT_DATE), norm_date(LATEST_DATE))
+            _whole_csv = _build_report_csv(FIRST_DATE, LATEST_DATE, "Whole report")
+            _six_week_csv = _build_report_csv(FIRST_DATE, _first_six_end, "First six weeks report")
+            _selected_week_csv = _build_report_csv(_report_week_start, _report_week_end, "Selected week report")
+
+            st.download_button(
+                "1. Whole report (CSV)",
+                data=_whole_csv.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"alpha_whole_report_{norm_date(FIRST_DATE):%Y-%m-%d}_to_{norm_date(LATEST_DATE):%Y-%m-%d}.csv",
+                mime="text/csv", use_container_width=True, key="alpha_download_whole_csv",
+            )
+            st.download_button(
+                "2. First six weeks report (CSV)",
+                data=_six_week_csv.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"alpha_first_six_weeks_{norm_date(FIRST_DATE):%Y-%m-%d}_to_{_first_six_end:%Y-%m-%d}.csv",
+                mime="text/csv", use_container_width=True, key="alpha_download_six_csv",
+            )
+            st.download_button(
+                "3. Selected week report (CSV)",
+                data=_selected_week_csv.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"alpha_selected_week_{_report_week_start:%Y-%m-%d}_to_{_report_week_end:%Y-%m-%d}.csv",
+                mime="text/csv", use_container_width=True, key="alpha_download_selected_csv",
+            )
+        else:
+            st.info("Reports will be available when NIFTY 50 trading dates load.")
+
+
+
 c = st.columns(5)
 c[0].metric("Research Equities", "15")
 c[1].metric("Research Debt", "3")
@@ -666,7 +810,7 @@ if not weights1.empty:
     long1 = weights1.melt(id_vars="Date", var_name="Ticker", value_name="Weight %")
     long1["Instrument"] = long1["Ticker"].map({t: EQUITY_META[t][0] for t in EQUITY_META} | {t: DEBT_META[t]["name"] for t in DEBT_META} | {GOLD: "Gold ETF"})
     figw = px.line(long1, x="Date", y="Weight %", color="Instrument", markers=True, title="Weekly portfolio weights — Phase 1")
-    st.plotly_chart(figw, use_container_width=True, config={"responsive": True, "displaylogo": False})
+    st.plotly_chart(figw, use_container_width=True)
 
 if not phase1.empty:
     r1 = (phase1.iloc[-1] / phase1.iloc[0] - 1) * 100
@@ -714,7 +858,7 @@ if not weights2.empty:
     long2 = weights2.melt(id_vars="Date", var_name="Ticker", value_name="Weight %")
     long2["Instrument"] = long2["Ticker"].map({t: EQUITY_META[t][0] for t in EQUITY_META} | {t: DEBT_META[t]["name"] for t in DEBT_META} | {GOLD: "Gold ETF"})
     figw2 = px.line(long2, x="Date", y="Weight %", color="Instrument", markers=True, title="Weekly portfolio weights — Phase 2")
-    st.plotly_chart(figw2, use_container_width=True, config={"responsive": True, "displaylogo": False})
+    st.plotly_chart(figw2, use_container_width=True)
 
 if not phase2.empty:
     r2 = (phase2.iloc[-1] / phase2.iloc[0] - 1) * 100
@@ -741,7 +885,7 @@ if not overall.empty:
         fig.add_trace(go.Scatter(x=norm_bench.index, y=norm_bench.values, name="NIFTY 50", mode="lines"))
     fig.add_vline(x=RESELECT_DATE.timestamp() * 1000, line_dash="dash", annotation_text="6-week reselection")
     fig.update_layout(title="Indexed growth — ₹100 starting value", xaxis_title="Date", yaxis_title="Indexed Value")
-    st.plotly_chart(fig, use_container_width=True, config={"responsive": True, "displaylogo": False})
+    st.plotly_chart(fig, use_container_width=True)
 
     overall_ret = (overall.iloc[-1] / overall.iloc[0] - 1) * 100
     bench_ret = (bench_all.iloc[-1] / bench_all.iloc[0] - 1) * 100 if not bench_all.empty else np.nan
@@ -760,204 +904,7 @@ if not overall.empty:
     if not bdd.empty:
         fd.add_trace(go.Scatter(x=bdd.index, y=bdd * 100, name="NIFTY Drawdown", mode="lines"))
     fd.update_layout(title="Portfolio vs NIFTY drawdown", yaxis_title="Drawdown %")
-    st.plotly_chart(fd, use_container_width=True, config={"responsive": True, "displaylogo": False})
-
-# ------------------------- weekly report download -------------------------
-st.header("📥 Weekly Report Export")
-st.write(
-    "Choose a weekly rebalance date to export a self-contained report for that week. "
-    "The Markdown file is suitable for uploading to an AI tool to generate a narrative dashboard report; "
-    "the JSON file contains structured data for analysis."
-)
-
-_report_dates = []
-for _wdf in (weights1, weights2):
-    if _wdf is not None and not _wdf.empty and "Date" in _wdf.columns:
-        _report_dates.extend([norm_date(d) for d in pd.to_datetime(_wdf["Date"], errors="coerce").dropna()])
-_report_dates = sorted(set(_report_dates))
-
-if _report_dates:
-    _report_date = st.selectbox(
-        "Select weekly report date",
-        options=_report_dates,
-        index=len(_report_dates) - 1,
-        format_func=lambda d: d.strftime("%A, %d %b %Y"),
-        key="weekly_report_date",
-    )
-    _phase_name = "Phase 1 — initial six-week portfolio" if _report_date <= norm_date(RESELECT_DATE) else "Phase 2 — post-reselection portfolio"
-    _weight_source = weights1 if _report_date <= norm_date(RESELECT_DATE) else weights2
-    _weight_row = None
-    if _weight_source is not None and not _weight_source.empty:
-        _wtemp = _weight_source.copy()
-        _wtemp["Date"] = pd.to_datetime(_wtemp["Date"], errors="coerce").map(lambda d: norm_date(d) if pd.notna(d) else pd.NaT)
-        _eligible = _wtemp[_wtemp["Date"] <= _report_date]
-        if not _eligible.empty:
-            _weight_row = _eligible.iloc[-1]
-
-    _portfolio_at_date = overall.loc[overall.index <= _report_date] if not overall.empty else pd.Series(dtype=float)
-    _portfolio_value = safe_float(_portfolio_at_date.iloc[-1]) if not _portfolio_at_date.empty else np.nan
-    _prior_report_dates = [d for d in _report_dates if d < _report_date]
-    _prior_report_date = _prior_report_dates[-1] if _prior_report_dates else None
-    _previous_week_values = overall.loc[overall.index <= _prior_report_date] if not overall.empty and _prior_report_date is not None else pd.Series(dtype=float)
-    _prior_value = safe_float(_previous_week_values.iloc[-1]) if not _previous_week_values.empty else np.nan
-    _weekly_return = (_portfolio_value / _prior_value - 1) * 100 if pd.notna(_portfolio_value) and pd.notna(_prior_value) and _prior_value else np.nan
-    _benchmark_to_date = asof(BENCHMARK, _report_date)
-    _benchmark_value = safe_float(_benchmark_to_date["Close"].iloc[-1]) if _benchmark_to_date is not None and not _benchmark_to_date.empty else np.nan
-    _benchmark_before = asof(BENCHMARK, _report_date - pd.Timedelta(days=7))
-    _benchmark_prev = safe_float(_benchmark_before["Close"].iloc[-1]) if _benchmark_before is not None and not _benchmark_before.empty else np.nan
-    _benchmark_week_return = (_benchmark_value / _benchmark_prev - 1) * 100 if pd.notna(_benchmark_value) and pd.notna(_benchmark_prev) and _benchmark_prev else np.nan
-
-    _holding_rows = []
-    _report_weights = {}
-    _previous_weight_row = None
-    if _weight_source is not None and not _weight_source.empty and _prior_report_date is not None:
-        _prior_rows = _weight_source.copy()
-        _prior_rows["Date"] = pd.to_datetime(_prior_rows["Date"], errors="coerce").map(lambda d: norm_date(d) if pd.notna(d) else pd.NaT)
-        _prior_eligible = _prior_rows[_prior_rows["Date"] <= _prior_report_date]
-        if not _prior_eligible.empty:
-            _previous_weight_row = _prior_eligible.iloc[-1]
-    if _weight_row is not None:
-        for _ticker in list(EQUITY_META) + list(DEBT_META) + [GOLD]:
-            _weight = safe_float(_weight_row.get(_ticker))
-            if pd.isna(_weight) or _weight <= 0:
-                continue
-            _report_weights[_ticker] = round(float(_weight), 4)
-            if _ticker in EQUITY_META:
-                _nm, _sector = EQUITY_META[_ticker]
-                _price = close_asof(_ticker, _report_date)
-                _holding_rows.append({
-                    "Instrument": _nm, "Ticker": _ticker, "Type": "Equity", "Sector": _sector,
-                    "Weight %": _weight,
-                    "Weight Change (pp)": (_weight - safe_float(_previous_weight_row.get(_ticker), 0.0)) if _previous_weight_row is not None else np.nan,
-                    "Price ₹": _price,
-                    "1W Return %": return_pct(_ticker, _report_date, 7),
-                    "6W Return %": return_pct(_ticker, _report_date, 42),
-                    "Volatility %": volatility(_ticker, _report_date, 42),
-                    "Beta": beta(_ticker, _report_date),
-                    "P/E": info_metrics(_ticker, _report_date)["P/E"],
-                })
-            elif _ticker in DEBT_META:
-                _dm = DEBT_META[_ticker]
-                _holding_rows.append({
-                    "Instrument": _dm["name"], "Ticker": _ticker, "Type": "Debt", "Sector": _dm["sector"],
-                    "Weight %": _weight,
-                    "Weight Change (pp)": (_weight - safe_float(_previous_weight_row.get(_ticker), 0.0)) if _previous_weight_row is not None else np.nan,
-                    "Price ₹": np.nan, "Model Yield %": _dm["yield"] * 100,
-                    "Model Risk": _dm["risk"],
-                })
-            else:
-                _holding_rows.append({
-                    "Instrument": "Nippon India ETF Gold BeES", "Ticker": GOLD, "Type": "Gold",
-                    "Sector": "Commodity", "Weight %": _weight,
-                    "Weight Change (pp)": (_weight - safe_float(_previous_weight_row.get(_ticker), 0.0)) if _previous_weight_row is not None else np.nan,
-                    "Price ₹": close_asof(GOLD, _report_date),
-                    "1W Return %": return_pct(GOLD, _report_date, 7),
-                    "6W Return %": return_pct(GOLD, _report_date, 42),
-                })
-    _holdings_df = pd.DataFrame(_holding_rows)
-
-    _phase1_end_value = safe_float(phase1.loc[phase1.index <= _report_date].iloc[-1]) if not phase1.loc[phase1.index <= _report_date].empty else np.nan
-    _overall_return_to_date = (_portfolio_value / overall.iloc[0] - 1) * 100 if pd.notna(_portfolio_value) and not overall.empty and overall.iloc[0] else np.nan
-    _benchmark_start_hist = asof(BENCHMARK, FIRST_DATE)
-    _benchmark_start_value = safe_float(_benchmark_start_hist["Close"].iloc[-1]) if _benchmark_start_hist is not None and not _benchmark_start_hist.empty else np.nan
-    _benchmark_total_to_date = (_benchmark_value / _benchmark_start_value - 1) * 100 if pd.notna(_benchmark_value) and pd.notna(_benchmark_start_value) and _benchmark_start_value else np.nan
-
-    st.caption(f"Report date: {_report_date:%d %b %Y} · {_phase_name} · Persona: {persona}")
-    _m1, _m2, _m3, _m4 = st.columns(4)
-    _m1.metric("Portfolio value", fmt_inr(_portfolio_value))
-    _m2.metric("Weekly portfolio return", fmt_pct(_weekly_return))
-    _m3.metric("Weekly NIFTY return", fmt_pct(_benchmark_week_return))
-    _m4.metric("Return since start", fmt_pct(_overall_return_to_date))
-    st.subheader("Holdings and weights for selected week")
-    if not _holdings_df.empty:
-        st.dataframe(_holdings_df.round(3), use_container_width=True, hide_index=True)
-    else:
-        st.info("No weekly weights are available for this date yet.")
-
-    _week6_event = "YES — this is the week-6 reselection date." if _report_date == norm_date(RESELECT_DATE) else ("After the week-6 reselection." if _report_date > norm_date(RESELECT_DATE) else "Before the week-6 reselection.")
-    _report_payload = {
-        "report_title": "ALPHA Weekly Portfolio Research Report",
-        "report_date": _report_date.strftime("%Y-%m-%d"),
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "strategy_phase": _phase_name,
-        "persona": persona,
-        "persona_description": PERSONAS[persona]["description"],
-        "starting_capital_inr": float(capital),
-        "portfolio_value_inr": float(_portfolio_value) if pd.notna(_portfolio_value) else None,
-        "weekly_portfolio_return_pct": float(_weekly_return) if pd.notna(_weekly_return) else None,
-        "weekly_nifty_return_pct": float(_benchmark_week_return) if pd.notna(_benchmark_week_return) else None,
-        "overall_return_since_start_pct": float(_overall_return_to_date) if pd.notna(_overall_return_to_date) else None,
-        "nifty_return_since_start_pct": float(_benchmark_total_to_date) if pd.notna(_benchmark_total_to_date) else None,
-        "week6_reselection_date": norm_date(RESELECT_DATE).strftime("%Y-%m-%d"),
-        "week6_reselection_status": _week6_event,
-        "research_universe": {
-            "equities": [{"ticker": t, "company": n, "sector": s} for t, (n, s) in EQUITY_META.items()],
-            "debt": [{"ticker": t, "instrument": m["name"], "assumed_yield_pct": m["yield"] * 100, "model_risk": m["risk"]} for t, m in DEBT_META.items()],
-            "gold_etf": GOLD,
-        },
-        "holdings": _holdings_df.replace({np.nan: None}).to_dict(orient="records") if not _holdings_df.empty else [],
-        "weights_pct": _report_weights,
-        "methodology_notes": [
-            "Research universe: 15 equities + 3 debt instruments + Gold ETF.",
-            "Actual portfolio: 12 equities + 2 debt instruments + Gold ETF.",
-            "Equity selection score combines momentum, peer-relative valuation, inverse volatility, inverse beta and drawdown.",
-            "Weights are recalculated weekly; after week 6, the equity and debt selections are re-ranked.",
-            "Debt performance is modelled using assumed annual yields and daily accrual.",
-            "Historical returns are based on Yahoo Finance data; missing metrics may be unavailable.",
-            "This is a research simulation, not personalised investment advice; returns are not guaranteed.",
-        ],
-    }
-    _report_lines = [
-        "# ALPHA Weekly Portfolio Research Report", "",
-        f"- **Selected week/date:** {_report_date:%A, %d %B %Y}",
-        f"- **Strategy phase:** {_phase_name}", f"- **Investor persona:** {persona} — {PERSONAS[persona]['description']}",
-        f"- **Starting capital:** {fmt_inr(capital)}", f"- **Portfolio value at report date:** {fmt_inr(_portfolio_value)}",
-        f"- **Weekly portfolio return:** {fmt_pct(_weekly_return)}", f"- **Weekly NIFTY 50 return:** {fmt_pct(_benchmark_week_return)}",
-        f"- **Portfolio return since strategy start:** {fmt_pct(_overall_return_to_date)}",
-        f"- **NIFTY return since strategy start:** {fmt_pct(_benchmark_total_to_date)}",
-        f"- **Week-6 review date:** {norm_date(RESELECT_DATE):%d %b %Y}", f"- **Reselection status:** {_week6_event}", "",
-        "## Strategy and portfolio construction", "- Research universe: 15 equities, 3 debt instruments and Gold ETF.",
-        "- Actual holdings: 12 equities, 2 debt instruments and Gold ETF.",
-        "- Weights are redistributed weekly. At the week-6 review, the universe is re-ranked and Phase 2 uses the newly selected holdings.",
-        "- Equity scoring considers momentum, peer-relative valuation, inverse volatility, inverse beta and drawdown.",
-        "- Debt returns are simulated using the stated annual yield assumptions; this is not a live bond-price valuation.", "",
-        "## Holdings and weekly metrics", "| Instrument | Ticker | Type | Sector | Weight % | Price ₹ | 1W Return % | 6W Return % | Volatility % | Beta | P/E | Model Yield % | Model Risk |",
-        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
-    ]
-    if not _holdings_df.empty:
-        for _, _r in _holdings_df.iterrows():
-            _cells = []
-            for _col in ["Instrument", "Ticker", "Type", "Sector", "Weight %", "Weight Change (pp)", "Price ₹", "1W Return %", "6W Return %", "Volatility %", "Beta", "P/E", "Model Yield %", "Model Risk"]:
-                _v = _r.get(_col, np.nan)
-                _cells.append(str(_v) if pd.notna(_v) else "N/A")
-            _report_lines.append("| " + " | ".join(_cells) + " |")
-    _report_lines += ["", "## Research universe", "### Equities"]
-    _report_lines += [f"- {n} (`{t}`) — {s}" for t, (n, s) in EQUITY_META.items()]
-    _report_lines += ["", "### Debt instruments"]
-    _report_lines += [f"- {m['name']} (`{t}`) — assumed yield {m['yield']*100:.2f}%; model risk {m['risk']:.2f}" for t, m in DEBT_META.items()]
-    _report_lines += ["", "## Notes and limitations"] + [f"- {note}" for note in _report_payload["methodology_notes"]]
-    _report_lines += ["", "## Suggested AI task", "Use only the data in this report to create a concise, professional weekly portfolio dashboard narrative. Highlight performance versus NIFTY, weekly weight allocation, important holdings/risks, valuation and missing data. Clearly label model assumptions and do not invent facts or present the simulation as a guaranteed forecast."]
-    _markdown_report = "\n".join(_report_lines)
-
-    _file_stem = f"alpha_weekly_report_{_report_date:%Y%m%d}"
-    _dl1, _dl2, _dl3 = st.columns(3)
-    _dl1.download_button(
-        "⬇️ Download AI-ready report (.md)", data=_markdown_report.encode("utf-8"),
-        file_name=f"{_file_stem}.md", mime="text/markdown", use_container_width=True,
-    )
-    import json as _json
-    _dl2.download_button(
-        "⬇️ Download structured data (.json)",
-        data=_json.dumps(_report_payload, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
-        file_name=f"{_file_stem}.json", mime="application/json", use_container_width=True,
-    )
-    if not _holdings_df.empty:
-        _dl3.download_button(
-            "⬇️ Download holdings (.csv)", data=_holdings_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"{_file_stem}_holdings.csv", mime="text/csv", use_container_width=True,
-        )
-else:
-    st.info("Weekly report downloads will appear once weekly portfolio weights are available.")
+    st.plotly_chart(fd, use_container_width=True)
 
 # ------------------------- 8 portfolio snapshot -------------------------
 st.header("8. 💼 Current Portfolio Snapshot")
@@ -978,7 +925,7 @@ st.dataframe(current_df.round(2), use_container_width=True, hide_index=True)
 # Sector allocation
 sector_df = current_df.groupby("Sector", as_index=False)["Weight %"].sum().sort_values("Weight %", ascending=False)
 fig_sector = px.bar(sector_df, x="Sector", y="Weight %", title="Current sector / asset allocation")
-st.plotly_chart(fig_sector, use_container_width=True, config={"responsive": True, "displaylogo": False})
+st.plotly_chart(fig_sector, use_container_width=True)
 
 # ------------------------- 9 company analysis -------------------------
 st.header("9. 🔎 Company Analysis")
@@ -1006,7 +953,7 @@ st.write(f"**{name}** · {analysis_ticker} · {sector}")
 
 ret_df = pd.DataFrame({"Period": ["1M", "3M", "6M", "1Y"], "Return %": [ret1m, ret3m, ret6m, ret1y]})
 fig_ret = px.bar(ret_df, x="Period", y="Return %", title=f"{name} — historical returns")
-st.plotly_chart(fig_ret, use_container_width=True, config={"responsive": True, "displaylogo": False})
+st.plotly_chart(fig_ret, use_container_width=True)
 
 hist = HIST.get(analysis_ticker)
 if hist is not None and not hist.empty:
@@ -1019,7 +966,7 @@ if hist is not None and not hist.empty:
         fp.add_trace(go.Scatter(x=h.index, y=h["DMA50"], name="50 DMA"))
         fp.add_trace(go.Scatter(x=h.index, y=h["DMA200"], name="200 DMA"))
         fp.update_layout(title=f"{name} — Price & Moving Averages", yaxis_title="₹")
-        st.plotly_chart(fp, use_container_width=True, config={"responsive": True, "displaylogo": False})
+        st.plotly_chart(fp, use_container_width=True)
 
 fund = pd.DataFrame([
     ["EPS", m["EPS"]], ["P/E", m["P/E"]], ["Peer P/E", peerpe],
@@ -1078,12 +1025,12 @@ if len(comparison) >= 2:
     bar_ret = comp.dropna(subset=["6M Return %"]).copy()
     if not bar_ret.empty:
         fc = px.bar(bar_ret, x="Company", y="6M Return %", title="6M return comparison")
-        st.plotly_chart(fc, use_container_width=True, config={"responsive": True, "displaylogo": False})
+        st.plotly_chart(fc, use_container_width=True)
 
     bar_pe = comp.dropna(subset=["P/E"]).copy()
     if not bar_pe.empty:
         fv = px.bar(bar_pe, x="Company", y="P/E", title="Valuation comparison — P/E")
-        st.plotly_chart(fv, use_container_width=True, config={"responsive": True, "displaylogo": False})
+        st.plotly_chart(fv, use_container_width=True)
 
     # Plotly requires bubble sizes to be finite and strictly positive.
     scatter = comp.dropna(subset=["Volatility %", "6M Return %"]).copy()
@@ -1104,7 +1051,7 @@ if len(comparison) >= 2:
             title="Risk-return comparison", size_max=45
         )
         fs.update_traces(textposition="top center")
-        st.plotly_chart(fs, use_container_width=True, config={"responsive": True, "displaylogo": False})
+        st.plotly_chart(fs, use_container_width=True)
     else:
         st.info("Not enough valid return/volatility data to draw the risk-return comparison.")
 else:
@@ -1206,237 +1153,5 @@ st.markdown(
 This dashboard is designed as a research/academic portfolio experiment. Its scores and observations are not personalised investment recommendations.
 """
 )
-
-
-
-# ------------------------- WEEKLY REPORT EXPORTS -------------------------
-# Compact report menu in the top-right corner. Exactly three download actions,
-# all CSV, with one date selector used for the selected-week export.
-from datetime import timedelta as _timedelta
-
-top_left, top_right = st.columns([4, 1])
-with top_right:
-    with st.popover("📥 Download reports", use_container_width=True):
-        st.caption("All downloads are CSV files.")
-        _dates = available_dates()
-        if len(_dates) > 0:
-            _week_dates = week_start_dates(FIRST_DATE, LATEST_DATE)
-            _week_dates = [pd.Timestamp(d) for d in _week_dates if pd.Timestamp(d) <= norm_date(LATEST_DATE)]
-            if not _week_dates:
-                _week_dates = [norm_date(FIRST_DATE)]
-            _week_options = {d.strftime("%d %b %Y"): d for d in _week_dates}
-            _selected_label = st.selectbox(
-                "Select week",
-                list(_week_options.keys()),
-                index=max(0, len(_week_options) - 1),
-                key="report_selected_week_csv",
-            )
-            _week_start = _week_options[_selected_label]
-            _week_bucket = _dates[
-                (_dates >= _week_start)
-                & (_dates.to_period("W-FRI") == _week_start.to_period("W-FRI"))
-                & (_dates <= norm_date(LATEST_DATE))
-            ]
-            _week_end = _week_bucket[-1] if len(_week_bucket) else min(
-                _week_start + pd.Timedelta(days=4), norm_date(LATEST_DATE)
-            )
-
-            def _ret_for_period(series, start, end):
-                if series is None or len(series) < 2:
-                    return np.nan
-                part = series[(series.index >= norm_date(start)) & (series.index <= norm_date(end))]
-                if len(part) < 2 or safe_float(part.iloc[0]) == 0:
-                    return np.nan
-                return (safe_float(part.iloc[-1]) / safe_float(part.iloc[0]) - 1) * 100
-
-            def _phase_portfolio_for_period(start, end):
-                start, end = norm_date(start), norm_date(end)
-                p1 = phase1[(phase1.index >= start) & (phase1.index <= end)] if not phase1.empty else pd.Series(dtype=float)
-                p2 = phase2[(phase2.index >= start) & (phase2.index <= end)] if not phase2.empty else pd.Series(dtype=float)
-                if not p1.empty and not p2.empty:
-                    p2_scaled = p2 / p2.iloc[0] * phase1.iloc[-1]
-                    return pd.concat([p1, p2_scaled[p2_scaled.index > p1.index[-1]]])
-                if not p1.empty:
-                    return p1
-                if not p2.empty:
-                    anchor = phase1.iloc[-1] if not phase1.empty else CAPITAL
-                    return p2 / p2.iloc[0] * anchor
-                return pd.Series(dtype=float)
-
-            def _csv_report(start, end, report_label):
-                start, end = norm_date(start), norm_date(end)
-                portfolio = _phase_portfolio_for_period(start, end)
-                nifty = benchmark_series(start, end)
-                p_return = _ret_for_period(portfolio, start, end)
-                n_return = _ret_for_period(nifty, start, end)
-                alpha_return = p_return - n_return if pd.notna(p_return) and pd.notna(n_return) else np.nan
-
-                # Determine the holdings set applicable at the report end.
-                if end <= norm_date(RESELECT_DATE):
-                    eqs, debts = initial_selected_eq, initial_selected_debt
-                    phase_name = "Phase 1 — initial six weeks"
-                else:
-                    eqs, debts = selected_eq, selected_debt
-                    phase_name = "Phase 2 — after week-6 reselection"
-
-                # Most recent recorded weights as of report end.
-                last_weights = {}
-                for weight_frame in (weights1, weights2):
-                    if weight_frame is not None and not weight_frame.empty:
-                        temp = weight_frame.copy()
-                        temp["Date"] = pd.to_datetime(temp["Date"]).dt.tz_localize(None).dt.normalize()
-                        eligible = temp[temp["Date"] <= end].sort_values("Date")
-                        if not eligible.empty:
-                            last_weights.update(eligible.iloc[-1].drop(labels=["Date"]).to_dict())
-
-                rows = []
-                for ticker in eqs:
-                    im = info_metrics(ticker, end)
-                    rows.append({
-                        "Report Type": report_label,
-                        "Period Start": start.strftime("%Y-%m-%d"),
-                        "Period End": end.strftime("%Y-%m-%d"),
-                        "Selected Persona": persona,
-                        "Phase": phase_name,
-                        "ALPHA Portfolio Return %": p_return,
-                        "NIFTY 50 Same Period Return %": n_return,
-                        "Outperformance vs NIFTY (pp)": alpha_return,
-                        "Instrument Type": "Equity",
-                        "Instrument": EQUITY_META[ticker][0],
-                        "Ticker": ticker,
-                        "Sector": EQUITY_META[ticker][1],
-                        "Weight %": safe_float(last_weights.get(ticker)),
-                        "Price": close_asof(ticker, end),
-                        "1W Return %": return_pct(ticker, end, 7),
-                        "1M Return %": return_pct(ticker, end, 30),
-                        "6M Return %": return_pct(ticker, end, 180),
-                        "Volatility %": volatility(ticker, end),
-                        "Beta": beta(ticker, end),
-                        "P/E": im["P/E"],
-                        "P/B": im["P/B"],
-                        "ROE %": im["ROE %"],
-                        "Sharpe": sharpe(ticker, end),
-                        "Drawdown %": drawdown(ticker, end),
-                    })
-
-                for ticker in debts:
-                    dm = DEBT_META[ticker]
-                    rows.append({
-                        "Report Type": report_label,
-                        "Period Start": start.strftime("%Y-%m-%d"),
-                        "Period End": end.strftime("%Y-%m-%d"),
-                        "Selected Persona": persona,
-                        "Phase": phase_name,
-                        "ALPHA Portfolio Return %": p_return,
-                        "NIFTY 50 Same Period Return %": n_return,
-                        "Outperformance vs NIFTY (pp)": alpha_return,
-                        "Instrument Type": "Debt",
-                        "Instrument": dm["name"],
-                        "Ticker": ticker,
-                        "Sector": dm["sector"],
-                        "Weight %": safe_float(last_weights.get(ticker)),
-                        "Model Annual Yield %": dm["yield"] * 100,
-                        "Model Risk": dm["risk"],
-                    })
-
-                rows.append({
-                    "Report Type": report_label,
-                    "Period Start": start.strftime("%Y-%m-%d"),
-                    "Period End": end.strftime("%Y-%m-%d"),
-                    "Selected Persona": persona,
-                    "Phase": phase_name,
-                    "ALPHA Portfolio Return %": p_return,
-                    "NIFTY 50 Same Period Return %": n_return,
-                    "Outperformance vs NIFTY (pp)": alpha_return,
-                    "Instrument Type": "Gold ETF",
-                    "Instrument": "Nippon India ETF Gold BeES",
-                    "Ticker": GOLD,
-                    "Sector": "Commodity",
-                    "Weight %": safe_float(last_weights.get(GOLD)),
-                    "Price": close_asof(GOLD, end),
-                    "1W Return %": return_pct(GOLD, end, 7),
-                    "1M Return %": return_pct(GOLD, end, 30),
-                    "6M Return %": return_pct(GOLD, end, 180),
-                    "Volatility %": volatility(GOLD, end),
-                })
-
-                # Add one explicit summary row and daily performance rows for machine-readable detail.
-                rows.append({
-                    "Report Type": report_label,
-                    "Period Start": start.strftime("%Y-%m-%d"),
-                    "Period End": end.strftime("%Y-%m-%d"),
-                    "Selected Persona": persona,
-                    "Phase": phase_name,
-                    "ALPHA Portfolio Return %": p_return,
-                    "NIFTY 50 Same Period Return %": n_return,
-                    "Outperformance vs NIFTY (pp)": alpha_return,
-                    "Instrument Type": "SUMMARY",
-                    "Instrument": "Portfolio vs NIFTY 50",
-                    "Ticker": "",
-                    "Portfolio Start Value": safe_float(portfolio.iloc[0]) if not portfolio.empty else np.nan,
-                    "Portfolio End Value": safe_float(portfolio.iloc[-1]) if not portfolio.empty else np.nan,
-                    "Capital Assumption INR": capital,
-                    "Research Equities": len(EQUITY_META),
-                    "Research Debt Instruments": len(DEBT_META),
-                    "Actual Equity Holdings": 12,
-                    "Actual Debt Holdings": 2,
-                    "Gold ETF Holdings": 1,
-                    "Week-6 Reselection Date": norm_date(RESELECT_DATE).strftime("%Y-%m-%d"),
-                    "Methodology": "Yahoo Finance prices where available; debt uses model yield assumptions; taxes, brokerage, slippage and dividends not separately modelled.",
-                })
-
-                # Include daily portfolio and NIFTY series over the report period.
-                if not portfolio.empty:
-                    nifty_aligned = nifty.reindex(portfolio.index).ffill() if not nifty.empty else pd.Series(index=portfolio.index, dtype=float)
-                    for date in portfolio.index:
-                        rows.append({
-                            "Report Type": report_label,
-                            "Period Start": start.strftime("%Y-%m-%d"),
-                            "Period End": end.strftime("%Y-%m-%d"),
-                            "Selected Persona": persona,
-                            "Phase": phase_name,
-                            "Instrument Type": "DAILY PERFORMANCE",
-                            "Instrument": "ALPHA Portfolio",
-                            "Ticker": "",
-                            "Performance Date": date.strftime("%Y-%m-%d"),
-                            "Portfolio Value": safe_float(portfolio.loc[date]),
-                            "NIFTY 50 Value (same capital)": safe_float(nifty_aligned.loc[date]) if date in nifty_aligned.index else np.nan,
-                            "ALPHA Daily Return %": safe_float(portfolio.pct_change().loc[date] * 100),
-                            "NIFTY Daily Return %": safe_float(nifty_aligned.pct_change().loc[date] * 100) if date in nifty_aligned.index else np.nan,
-                        })
-
-                return pd.DataFrame(rows)
-
-            _six_end = min(norm_date(RESELECT_DATE), norm_date(LATEST_DATE))
-            _whole_df = _csv_report(FIRST_DATE, LATEST_DATE, "Whole report")
-            _six_df = _csv_report(FIRST_DATE, _six_end, "First six weeks")
-            _week_df = _csv_report(_week_start, _week_end, "Selected week")
-
-            st.download_button(
-                "1. Download whole report (CSV)",
-                data=_whole_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"alpha_whole_report_{norm_date(FIRST_DATE):%Y-%m-%d}_to_{norm_date(LATEST_DATE):%Y-%m-%d}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="download_whole_csv",
-            )
-            st.download_button(
-                "2. Download first six weeks (CSV)",
-                data=_six_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"alpha_first_six_weeks_{norm_date(FIRST_DATE):%Y-%m-%d}_to_{_six_end:%Y-%m-%d}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="download_six_weeks_csv",
-            )
-            st.download_button(
-                "3. Download selected week (CSV)",
-                data=_week_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"alpha_selected_week_{_week_start:%Y-%m-%d}_to_{_week_end:%Y-%m-%d}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="download_selected_week_csv",
-            )
-        else:
-            st.info("Weekly reports become available when NIFTY 50 trading dates load.")
 
 st.caption("ALPHA • Dynamic 6-week reselection + weekly weight redistribution • Research dashboard")
