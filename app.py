@@ -1249,7 +1249,9 @@ def _basic_report_df(_start, _end, _label):
         _rows.append({"Report": _label, "Persona": _persona_name, "Start Date": _start.date(), "End Date": _end.date(), "Trading Dates": len(_series), "Starting Value INR": safe_float(_series.iloc[0]) if len(_series) else np.nan, "Ending Value INR": safe_float(_series.iloc[-1]) if len(_series) else np.nan, "Portfolio Return %": _pret, "NIFTY 50 Return %": _bret, "Outperformance pp": _pret - _bret if pd.notna(_pret) and pd.notna(_bret) else np.nan})
     return pd.DataFrame(_rows)
 
-with st.expander("📥 Download reports and master Excel workbook", expanded=True):
+with report_download_slot.container():
+    st.header("📥 DOWNLOAD CENTER — MASTER EXCEL + CSV REPORTS")
+    st.markdown("**These download buttons are shown at the top of the dashboard.** The master workbook includes every available trading date and all three personas across both portfolio phases.")
     st.markdown("Download the complete daily report for **all three personas**, covering both the first six-week period and the post-reshuffle period.")
     _master_xlsx = None
     _master_error = None
@@ -1296,6 +1298,7 @@ with st.expander("📥 Download reports and master Excel workbook", expanded=Tru
             st.warning(f"CSV summaries could not be prepared: {_csv_exc}")
     else:
         st.warning("Market trading dates have not loaded, so downloads cannot yet be prepared. Check the connection and use 'Clear Yahoo cache & reload'.")
+
 
 st.caption("ALPHA • Dynamic 6-week reselection + weekly weight redistribution • Research dashboard")
 
